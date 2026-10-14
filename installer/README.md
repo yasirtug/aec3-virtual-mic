@@ -29,7 +29,7 @@ ISCC.exe installer\AEC3VirtualMic.iss               # -> installer\Output\AEC3Vi
 | --- | --- |
 | VB-CABLE already installed | An info page says the existing VB-CABLE and its settings stay untouched. Setup doesn't install or configure it. |
 | VB-CABLE missing, VAC Lite installed | A page with two options, "Use the installed VAC Lite" (default) and "Install VB-CABLE (VB-Audio donationware)". VAC Lite is detected by running the bundled exe with `--detect-cables` from Setup's temp folder (exit code bitmask: 1 = VB-CABLE, 2 = VAC Lite), i.e. with the app's own detection. |
-| VB-CABLE missing (and VAC Lite missing, or "Install VB-CABLE" chosen) | The page says VB-CABLE will be installed, that it is VB-Audio donationware (all participations welcome), and links to www.vb-cable.com. Setup then installs it silently, writes `HKLM\Software\AEC3VirtualMic` `InstalledVbCable=1` (DWORD) and runs `AEC3VirtualMic.exe --configure-vbcable` elevated. It does not ask for a restart: the cable works immediately (verified on Windows 11), only the lower latency waits for the next normal reboot. |
+| VB-CABLE missing (and VAC Lite missing, or "Install VB-CABLE" chosen) | The page says VB-CABLE will be installed, that it is VB-Audio donationware (all participations welcome), and links to www.vb-cable.com. Setup then installs it silently, writes `HKLM\Software\AEC3VirtualMic` `InstalledVbCable=1` (DWORD) and runs `AEC3VirtualMic.exe --configure-vbcable` elevated. It does not ask for a restart: the cable works immediately (verified on Windows 11). |
 | Always | The unmodified VB-CABLE pack is kept in `{app}\vbcable`, so the uninstaller can remove VB-CABLE on request even when Setup didn't install it. |
 | Task "Start AEC3 Virtual Mic with Windows" (unchecked by default) | Runs `AEC3VirtualMic.exe --enable-autostart` as the original (non-elevated) user. |
 | "Launch AEC3 Virtual Mic now" (finish page) | Starts the app as the original user. |
@@ -40,8 +40,8 @@ When VB-CABLE is freshly installed, the [Run] order is:
 1. `AEC3VirtualMic.exe --snapshot-audio-defaults` saves the current default playback and recording
    endpoints for all roles.
 2. `vbcable\VBCABLE_Setup_x64.exe -i -h` installs the driver.
-3. `AEC3VirtualMic.exe --configure-vbcable` applies the settings below, restores the saved default
-   devices if a CABLE endpoint took them over, and deletes the snapshot.
+3. `AEC3VirtualMic.exe --configure-vbcable` keeps the cable's endpoint formats at 48 kHz, restores the
+   saved default devices if a CABLE endpoint took them over, and deletes the snapshot.
 
 Windows may show its "Would you like to install this device software (VB-Audio Software)?"
 driver-trust prompt even during a silent VB-CABLE install.
@@ -150,14 +150,8 @@ VB-CABLE]:
   (Win10/11).
 
 `ConfigureFreshVbCable()` in `vbcable_setup.cc` runs only after this installer freshly installed
-VB-CABLE. It applies these settings:
+VB-CABLE. It leaves the driver parameters above alone and does this:
 
-- `VBAudioCableWDM_SR = 48000`. This matches the app's 48 kHz processing and the endpoint formats, so
-  the cable never resamples. It is already the setup's default; the function writes it explicitly.
-- `VBAudioCableWDM_Latency = 3072` (3 x 1024 samples, a preset in VB-Audio's Control Panel; 64 ms
-  instead of 149 ms of pipe). The Windows audio engine moves shared-mode audio in 10 ms (480-sample)
-  periods, so 3 x 1024 keeps the manual's 3x rule with headroom. Max Latency is left at its default,
-  so no extra driver memory is allocated.
 - CABLE Input / CABLE Output device formats: if either is not 48 kHz, it is set to 48 kHz 24-bit
   (keeping the channel count) with `IPolicyConfig::SetDeviceFormat`. Normally they are already 48 kHz
   from the INF.
@@ -167,8 +161,21 @@ VB-CABLE. It applies these settings:
   endpoint saved by `--snapshot-audio-defaults` with `IPolicyConfig::SetDefaultEndpoint`. It does this
   twice (about 2 s and 5 s after the endpoints appear), because switching can lag behind arrival.
 
-The registry values take effect at the next driver start (the next normal reboot). Until then the cable
-runs with the setup defaults (48 kHz, 7168), which work but have more latency.
+### Measured latency
+
+Click round-trip through the cable (shared mode, 48 kHz float, median of 8 clicks, Windows 11, pack 45),
+including Windows' own buffering on both ends:
+
+| Cable / setting | Latency |
+| --- | --- |
+| VAC Lite | ~19 ms |
+| VB-CABLE, setup defaults (`VBAudioCableWDM_Latency` 7168) | ~75 ms |
+| VB-CABLE, `VBAudioCableWDM_Latency` 3072, after a full reboot | ~93 ms |
+| VB-CABLE, `VBAudioCableWDM` / `_Latency` 1024, after a device restart | ~84–86 ms |
+
+Lowering the documented latency values didn't reduce VB-CABLE's delay, so Setup no longer writes
+them; its setup already selects the 48 kHz internal rate. VAC Lite is the lower-latency cable, which is
+why Setup offers to keep an installed VAC Lite instead of adding VB-CABLE.
 
 `IPolicyConfig` (CLSID `870af99c-171d-4f9e-af0d-e63df40c2bc9`, IID `f8679f50-850a-41cf-9c72-430f290290c8`)
 is the undocumented interface the Windows Sound control panel uses. Its layout matches, for example,

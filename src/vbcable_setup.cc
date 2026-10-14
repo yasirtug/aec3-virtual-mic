@@ -22,27 +22,15 @@ using Microsoft::WRL::ComPtr;
 // Exit codes (logged by the installer).
 constexpr int kExitOk = 0;
 constexpr int kExitComFailed = 1;
-constexpr int kExitDriverSettingsFailed = 2;
 constexpr int kExitSnapshotFailed = 3;
 
 // HKLM key of our installer (also holds the `InstalledVbCable` marker).
 constexpr wchar_t kInstallerKey[] = L"Software\\AEC3VirtualMic";
 
-// Parameters the VB-CABLE driver (vbaudio_cable64_win10.sys, pack 45) reads
-// once when the driver starts: REG_DWORD values under
-// HKLM\Software\VB-Audio\Cable. They take effect on the next driver start
-// (the reboot VB-CABLE requires after installation).
-constexpr wchar_t kVbCableDriverKey[] = L"Software\\VB-Audio\\Cable";
-// Internal sample rate; 48 kHz equals the cable's endpoint formats and the
-// app's processing rate, so audio passes the cable without resampling.
-constexpr wchar_t kVbCableSampleRateValue[] = L"VBAudioCableWDM_SR";
-constexpr DWORD kVbCableSampleRate = 48000;
-// Pipe latency in samples (driver default 7168 = 149 ms at 48 kHz). The
-// Windows audio engine feeds and drains the cable with 10 ms (480 sample)
-// periods; 3 x 1024 keeps VB-Audio's "3 x largest buffer" rule with headroom
-// for clients using up to 1024-sample buffers.
-constexpr wchar_t kVbCableLatencyValue[] = L"VBAudioCableWDM_Latency";
-constexpr DWORD kVbCableLatency = 3 * 1024;
+// VB-CABLE's own driver parameters (HKLM\Software\VB-Audio\Cable) are left
+// alone: its setup already selects 48 kHz, and lowering
+// VBAudioCableWDM_Latency measured no latency change, even after a reboot
+// (see installer/README.md).
 
 // Adapter name of the VB-CABLE endpoints ("CABLE Input", "CABLE In 16ch",
 // "CABLE Output"), from the driver INF.
@@ -152,27 +140,6 @@ std::wstring SnapshotValueName(EDataFlow flow, ERole role) {
   return std::wstring(flow == eRender ? L"SnapshotDefaultRender"
                                       : L"SnapshotDefaultCapture") +
          std::to_wstring(static_cast<int>(role));
-}
-
-bool WriteDword(HKEY key, const wchar_t* name, DWORD value) {
-  return RegSetValueExW(key, name, 0, REG_DWORD,
-                        reinterpret_cast<const BYTE*>(&value),
-                        sizeof(value)) == ERROR_SUCCESS;
-}
-
-bool ApplyDriverSettings() {
-  HKEY key = nullptr;
-  if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, kVbCableDriverKey, 0, nullptr,
-                      REG_OPTION_NON_VOLATILE,
-                      KEY_SET_VALUE | KEY_WOW64_64KEY, nullptr, &key,
-                      nullptr) != ERROR_SUCCESS) {
-    return false;
-  }
-  const bool ok =
-      WriteDword(key, kVbCableSampleRateValue, kVbCableSampleRate) &&
-      WriteDword(key, kVbCableLatencyValue, kVbCableLatency);
-  RegCloseKey(key);
-  return ok;
 }
 
 std::wstring EndpointId(IMMDevice* device) {
@@ -422,8 +389,6 @@ int SnapshotAudioDefaults() {
 }
 
 int ConfigureFreshVbCable() {
-  const bool driver_ok = ApplyDriverSettings();
-
   ComScope com;
   if (!com.usable()) {
     return kExitComFailed;
@@ -489,5 +454,5 @@ int ConfigureFreshVbCable() {
     }
     RegCloseKey(snapshot_key);
   }
-  return driver_ok ? kExitOk : kExitDriverSettingsFailed;
+  return kExitOk;
 }

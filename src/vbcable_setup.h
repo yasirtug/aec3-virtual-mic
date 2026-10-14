@@ -17,10 +17,9 @@ int DetectVirtualCables();
 // cable.
 int SnapshotAudioDefaults();
 
-// `--configure-vbcable`: runs right after the VB-CABLE setup. Applies the
-// recommended VB-CABLE settings (48 kHz internal rate, reduced pipe latency,
-// 48 kHz endpoint formats), restores the snapshotted default endpoints if a
-// CABLE endpoint took them over, and deletes the snapshot.
+// `--configure-vbcable`: runs right after the VB-CABLE setup. Keeps the
+// cable's endpoint formats at 48 kHz, restores the snapshotted default
+// endpoints if a CABLE endpoint took them over, and deletes the snapshot.
 int ConfigureFreshVbCable();
 
 #endif  // AEC3_VIRTUAL_MIC_VBCABLE_SETUP_H_
