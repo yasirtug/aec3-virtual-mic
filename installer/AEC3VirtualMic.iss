@@ -88,6 +88,14 @@ Source: "{#VacDir}\*"; DestDir: "{tmp}\vaclite"; Check: ShouldInstallVacLite; Fl
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"
 
+[Registry]
+; Fresh VAC Lite install only: enable the cable's volume control (documented
+; per-cable "Volume control" DWORD, VAC manual "Configuration data in the
+; Registry"). [Registry] runs before [Run], so the driver reads it on its first
+; start. At 100% the signal is unchanged; it gives "Line 1" a working volume
+; slider in Windows. An existing VAC's settings are never touched.
+Root: HKLM64; Subkey: "SOFTWARE\EuMus Design\Virtual Audio Cable\4\Cable 1"; ValueType: dword; ValueName: "Volume control"; ValueData: 1; Check: ShouldInstallVacLite
+
 [Run]
 ; No virtual cable yet: remember the default devices, run VAC Lite's own
 ; setup, then restore the default devices if Windows switched them to VAC.
@@ -372,8 +380,13 @@ begin
     Params := '';
   end;
   UninstallProgressForm.StatusLabel.Caption := 'Removing Virtual Audio Cable Lite (follow its window)...';
-  if Exec(Exe, Params, ExtractFileDir(Exe), SW_SHOWNORMAL, ewWaitUntilTerminated, ResultCode) then
-    Log(Format('VAC Lite uninstall exit code: %d', [ResultCode]))
+  // VAC's setup64.exe hands the work to another process and exits at once;
+  // Start-Process -Wait also waits for that child, so wait through PowerShell.
+  if Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+      '-NoProfile -NonInteractive -Command "Start-Process -FilePath ''' + Exe +
+      ''' -ArgumentList ''' + Params + ''' -Wait"', ExtractFileDir(Exe), SW_HIDE,
+      ewWaitUntilTerminated, ResultCode) then
+    Log(Format('VAC Lite uninstall finished (exit code %d), VAC Lite still installed: %d', [ResultCode, Ord(IsVacLiteInstalled)]))
   else
     Log(Format('Could not run the VAC Lite uninstaller: %d', [ResultCode]));
 end;
