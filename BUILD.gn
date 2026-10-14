@@ -1,0 +1,86 @@
+import("//build/config/win/manifest.gni")
+import("//webrtc.gni")
+
+# Staged by build.bat into <WEBRTC_ROOT>/examples/aec3_virtual_mic together
+# with src/, assets/ and third_party/; all paths are relative to this file.
+
+# Merged into the executable by the linker (a second RT_MANIFEST in app.rc
+# would collide with the one the toolchain embeds).
+windows_manifest("aec3_virtual_mic_manifest") {
+  sources = [ "src/app.manifest" ]
+}
+
+# Vendored RNNoise; provenance and model hash in third_party/rnnoise/VENDOR.md.
+config("rnnoise_public") {
+  include_dirs = [ "third_party/rnnoise/include" ]
+}
+
+static_library("rnnoise") {
+  sources = [
+    "third_party/rnnoise/src/celt_lpc.c",
+    "third_party/rnnoise/src/denoise.c",
+    "third_party/rnnoise/src/kiss_fft.c",
+    "third_party/rnnoise/src/nnet.c",
+    "third_party/rnnoise/src/nnet_default.c",
+    "third_party/rnnoise/src/parse_lpcnet_weights.c",
+    "third_party/rnnoise/src/pitch.c",
+    "third_party/rnnoise/src/rnn.c",
+    "third_party/rnnoise/src/rnnoise_data.c",
+    "third_party/rnnoise/src/rnnoise_tables.c",
+  ]
+  include_dirs = [ "third_party/rnnoise/src" ]
+  public_configs = [ ":rnnoise_public" ]
+  defines = [ "RNNOISE_BUILD" ]
+  configs -= [ "//build/config/compiler:chromium_code" ]
+  configs += [ "//build/config/compiler:no_chromium_code" ]
+}
+
+rtc_executable("aec3_virtual_mic") {
+  sources = [
+    "src/app.rc",
+    "src/audio_devices.cc",
+    "src/audio_devices.h",
+    "src/audio_engine.cc",
+    "src/audio_engine.h",
+    "src/echo_model.cc",
+    "src/echo_model.h",
+    "src/main.cc",
+    "src/resource.h",
+    "src/ui_device_notifier.cc",
+    "src/ui_device_notifier.h",
+    "src/ui_level_meter.cc",
+    "src/ui_level_meter.h",
+    "src/ui_settings.cc",
+    "src/ui_settings.h",
+    "src/vbcable_setup.cc",
+    "src/vbcable_setup.h",
+  ]
+
+  configs += [
+    "//build/config/win:windowed",
+    "//third_party/tflite:tflite_config_no_undef",
+  ]
+
+  deps = [
+    ":aec3_virtual_mic_manifest",
+    ":rnnoise",
+    "//api/audio:audio_processing",
+    "//api/audio:builtin_audio_processing_builder",
+    "//api/audio:neural_residual_echo_estimator_creator",
+    "//api/environment:environment_factory",
+    "//third_party/tflite:tflite_builtin_op_resolver_standalone",
+    "//third_party/tflite:tflite_standalone",
+  ]
+
+  libs = [
+    "advapi32.lib",
+    "avrt.lib",
+    "comctl32.lib",
+    "mmdevapi.lib",
+    "ole32.lib",
+    "propsys.lib",
+    "shell32.lib",
+    "user32.lib",
+    "uuid.lib",
+  ]
+}

@@ -1,0 +1,119 @@
+name: Build
+
+# Builds AEC3VirtualMic.exe against the pinned WebRTC revision (WEBRTC_REVISION)
+# and packages the Inno Setup installer with VB-CABLE. Every push to main and
+# every pull request produces the installer as a workflow artifact; pushing a
+# tag "vX.Y.Z" (matching AEC3VM_VERSION_STR in src/resource.h) also publishes
+# a GitHub release.
+#
+# The WebRTC checkout is not cached: even without git history and test
+# resources it is ~10 GB, which exceeds the repository's Actions cache quota.
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+    paths-ignore:
+      - "**.md"
+  pull_request:
+    paths-ignore:
+      - "**.md"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 360
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Check tag matches app version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $match = Select-String -Path src/resource.h -Pattern '#define\s+AEC3VM_VERSION_STR\s+"([^"]+)"'
+          if (-not $match) { throw 'AEC3VM_VERSION_STR was not found in src/resource.h' }
+          $version = $match.Matches[0].Groups[1].Value
+          $tagVersion = '${{ github.ref_name }}'.Substring(1)
+          if ($version -ne $tagVersion) {
+            throw "Tag ${{ github.ref_name }} does not match src/resource.h version $version"
+          }
+
+      - name: Prepare disk and git
+        shell: pwsh
+        run: |
+          # The checkout plus build output needs ~20 GB; use the roomiest drive.
+          $drive = Get-PSDrive -PSProvider FileSystem |
+            Where-Object { $_.Free -gt 0 } |
+            Sort-Object Free -Descending |
+            Select-Object -First 1
+          $free = [math]::Round($drive.Free / 1GB, 1)
+          Write-Host "Using drive $($drive.Root) with $free GB free"
+          "AEC3_DEPS_DIR=$($drive.Root)aec3-deps" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          git config --global core.longpaths true
+
+      - name: Fetch depot_tools and WebRTC
+        shell: cmd
+        run: call scripts\fetch_webrtc.bat
+
+      - name: Build AEC3VirtualMic.exe
+        shell: cmd
+        run: call build.bat
+
+      - name: Download VB-CABLE
+        shell: pwsh
+        run: ./installer/fetch_vbcable.ps1
+
+      - name: Ensure Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { throw "Installing Inno Setup failed ($LASTEXITCODE)" }
+          }
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe was not found at $iscc" }
+          "ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          & $env:ISCC installer/AEC3VirtualMic.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: AEC3VirtualMic-${{ github.sha }}
+          path: |
+            installer/Output/*.exe
+            bin/AEC3VirtualMic.exe
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installer/Output/*.exe
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          body: |
+            Download and run `AEC3VirtualMic-Setup-*.exe`, then pick
+            **CABLE Output (VB-Audio Virtual Cable)** as the microphone in Discord or other apps.
+
+            The installer bundles **VB-CABLE Virtual Audio Device**, donationware by VB-Audio Software
+            (https://www.vb-cable.com), and installs it only if it is not already present.
+
+            The optional neural echo suppression uses Chrome's echo model, which is **not** included:
+            the app copies it from your local Chrome profile if Chrome has downloaded it, and otherwise
+            uses classic WebRTC AEC3. See README.md and THIRD_PARTY_NOTICES.md.

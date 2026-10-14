@@ -1,0 +1,9 @@
+bin/
+.deps/
+installer/vendor/
+installer/Output/
+*.tflite
+# Generated RNNoise weights, fetched by scripts/fetch_rnnoise_model.ps1.
+third_party/rnnoise/src/rnnoise_data.c
+third_party/rnnoise/src/rnnoise_data.h
+third_party/rnnoise/src/.rnnoise_data.sha256
