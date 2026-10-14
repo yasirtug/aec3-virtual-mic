@@ -213,8 +213,9 @@ std::wstring GetDefaultAudioDeviceId(EDataFlow flow) {
   return id;
 }
 
-VirtualCable FindVirtualCable(const std::vector<AudioDeviceInfo>& render,
-                              const std::vector<AudioDeviceInfo>& capture) {
+std::vector<VirtualCable> FindVirtualCables(
+    const std::vector<AudioDeviceInfo>& render,
+    const std::vector<AudioDeviceInfo>& capture) {
   const AudioDeviceInfo* vb_cable = nullptr;
   const AudioDeviceInfo* vb_cable_variant = nullptr;
   std::wstring vb_cable_variant_name;
@@ -243,19 +244,21 @@ VirtualCable FindVirtualCable(const std::vector<AudioDeviceInfo>& render,
     }
   }
 
-  VirtualCable cable;
-  const AudioDeviceInfo* chosen = nullptr;
+  std::vector<VirtualCable> cables;
+  const auto add = [&](VirtualCableKind kind, const AudioDeviceInfo* device) {
+    VirtualCable cable;
+    cable.kind = kind;
+    cable.render_id = device->id;
+    cable.render_name = device->name;
+    cable.capture_name = CaptureNameFor(device->name, capture);
+    cables.push_back(std::move(cable));
+  };
   if (vb_cable != nullptr || vb_cable_variant != nullptr) {
-    cable.kind = VirtualCableKind::kVbCable;
-    chosen = vb_cable != nullptr ? vb_cable : vb_cable_variant;
-  } else if (vac_lite != nullptr || other_vac != nullptr) {
-    cable.kind = VirtualCableKind::kVacLite;
-    chosen = vac_lite != nullptr ? vac_lite : other_vac;
-  } else {
-    return cable;
+    add(VirtualCableKind::kVbCable,
+        vb_cable != nullptr ? vb_cable : vb_cable_variant);
   }
-  cable.render_id = chosen->id;
-  cable.render_name = chosen->name;
-  cable.capture_name = CaptureNameFor(chosen->name, capture);
-  return cable;
+  if (vac_lite != nullptr || other_vac != nullptr) {
+    add(VirtualCableKind::kVacLite, vac_lite != nullptr ? vac_lite : other_vac);
+  }
+  return cables;
 }

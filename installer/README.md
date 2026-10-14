@@ -28,9 +28,9 @@ ISCC.exe installer\AEC3VirtualMic.iss               # -> installer\Output\AEC3Vi
 | Situation | Behavior |
 | --- | --- |
 | VB-CABLE already installed | An info page says the existing VB-CABLE and its settings stay untouched. Setup doesn't install, configure or (later) uninstall it. |
-| VB-CABLE missing | A dedicated page says VB-CABLE will be installed, that it is VB-Audio donationware (all participations welcome), and links to www.vb-cable.com. Setup then installs it silently, writes `HKLM\Software\AEC3VirtualMic` `InstalledVbCable=1` (DWORD), keeps the pack in `{app}\vbcable`, runs `AEC3VirtualMic.exe --configure-vbcable` elevated, and asks for a restart. |
+| VB-CABLE missing | A dedicated page says VB-CABLE will be installed, that it is VB-Audio donationware (all participations welcome), and links to www.vb-cable.com. Setup then installs it silently, writes `HKLM\Software\AEC3VirtualMic` `InstalledVbCable=1` (DWORD), keeps the pack in `{app}\vbcable` and runs `AEC3VirtualMic.exe --configure-vbcable` elevated. It does not ask for a restart: the cable works immediately (verified on Windows 11), only the lower latency waits for the next normal reboot. |
 | Task "Start AEC3 Virtual Mic with Windows" (unchecked by default) | Runs `AEC3VirtualMic.exe --enable-autostart` as the original (non-elevated) user. |
-| "Launch AEC3 Virtual Mic now" (finish page) | Starts the app as the original user. Inno hides this checkbox when a restart is pending. |
+| "Launch AEC3 Virtual Mic now" (finish page) | Starts the app as the original user. |
 | Uninstall | Closes a running app (mutex `AEC3VirtualMic.Running`, then `taskkill /F`). Removes the HKCU Run value `AEC3VirtualMic` and `HKCU\Software\AEC3VirtualMic` for every loaded user profile, removes `{localappdata}\AEC3VirtualMic` of the uninstalling user, runs `VBCABLE_Setup_x64.exe -u -h` **only** if the marker is present, deletes `HKLM\Software\AEC3VirtualMic`, and asks for a restart if VB-CABLE was removed. |
 
 When VB-CABLE is freshly installed, the [Run] order is:
@@ -41,9 +41,8 @@ When VB-CABLE is freshly installed, the [Run] order is:
 3. `AEC3VirtualMic.exe --configure-vbcable` applies the settings below, restores the saved default
    devices if a CABLE endpoint took them over, and deletes the snapshot.
 
-Silent installs (`/VERYSILENT`) restart Windows automatically after a fresh VB-CABLE install unless you
-pass `/NORESTART`. Windows may still show its "Would you like to install this device software
-(VB-Audio Software)?" driver-trust prompt during a silent VB-CABLE install.
+Windows may show its "Would you like to install this device software (VB-Audio Software)?"
+driver-trust prompt even during a silent VB-CABLE install.
 
 ## VB-CABLE research
 
@@ -87,8 +86,9 @@ permission.
   ("silent install with "-i -h" and uninstall with "-u -h"").
 - Even in silent mode, Windows' driver-trust prompt can appear:
   [VB-Audio forum t=1766](https://forum.vb-audio.com/viewtopic.php?t=1766).
-- A reboot is required after both install and uninstall (download page and manual). Setup and
-  Uninstall therefore return `NeedRestart` / `UninstallNeedRestart`.
+- VB-Audio recommends a reboot after install and uninstall. In testing (Windows 11, pack 45) the cable
+  endpoints were usable immediately after the silent install, so Setup doesn't ask for a restart;
+  Uninstall returns `UninstallNeedRestart` after removing VB-CABLE.
 
 ### Detection
 
@@ -165,9 +165,8 @@ VB-CABLE. It applies these settings:
   endpoint saved by `--snapshot-audio-defaults` with `IPolicyConfig::SetDefaultEndpoint`. It does this
   twice (about 2 s and 5 s after the endpoints appear), because switching can lag behind arrival.
 
-The registry values take effect at the next driver start, which is the restart VB-CABLE requires
-anyway. If the user doesn't restart, the cable keeps running with the setup defaults (48 kHz, 7168),
-which work but have more latency.
+The registry values take effect at the next driver start (the next normal reboot). Until then the cable
+runs with the setup defaults (48 kHz, 7168), which work but have more latency.
 
 `IPolicyConfig` (CLSID `870af99c-171d-4f9e-af0d-e63df40c2bc9`, IID `f8679f50-850a-41cf-9c72-430f290290c8`)
 is the undocumented interface the Windows Sound control panel uses. Its layout matches, for example,

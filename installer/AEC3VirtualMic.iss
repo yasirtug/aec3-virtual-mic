@@ -236,8 +236,9 @@ begin
       'AEC3 Virtual Mic plays your processed voice into a virtual audio cable that apps ' +
       'such as Discord, Zoom or OBS use as their microphone ("CABLE Output").' + #13#10#13#10 +
       'No VB-CABLE was found, so Setup will install VB-CABLE by VB-Audio Software. ' +
-      'Windows may ask you to confirm the VB-Audio driver; a restart is recommended ' +
-      'afterwards. Setup configures the new cable for voice (48 kHz, lower latency) and ' +
+      'Windows may ask you to confirm the VB-Audio driver. No restart is needed; the cable ' +
+      'works right away. Setup configures it for voice (48 kHz, lower latency after the next ' +
+      'restart) and ' +
       'keeps your default speakers and microphone. Uninstalling AEC3 Virtual Mic also ' +
       'removes this VB-CABLE.' + #13#10#13#10 +
       'VB-CABLE is donationware: free to use, and all participations are welcome. ' +
@@ -287,10 +288,6 @@ begin
     'may be absent. Without it the app uses classic WebRTC AEC3.';
 end;
 
-function NeedRestart: Boolean;
-begin
-  Result := VbCableInstalledNow;
-end;
 
 // ---------------------------------------------------------------- Uninstall
 

@@ -47,6 +47,7 @@ constexpr UINT kTrayIconId = 1;
 // Settings value names (HKCU\Software\AEC3VirtualMic).
 constexpr wchar_t kMicrophoneSetting[] = L"MicrophoneId";
 constexpr wchar_t kSpeakersSetting[] = L"SpeakerOutputId";
+constexpr wchar_t kCableSetting[] = L"VirtualCable";  // "vbcable" or "vac".
 constexpr wchar_t kNoiseSetting[] = L"NoiseSuppression";
 constexpr wchar_t kEchoCancellationSetting[] = L"EchoCancellation";
 constexpr wchar_t kNeuralModelSetting[] = L"NeuralEchoModel";
@@ -58,6 +59,7 @@ enum ControlId : int {
   kDiscordName,
   kMicrophoneCombo,
   kSpeakersCombo,
+  kCableCombo,
   kCableText,
   kCableLink,
   kEchoCancellationCheck,
@@ -133,11 +135,15 @@ constexpr wchar_t kTipCable[] =
     L"Mic installer sets up VB-CABLE (VB-Audio donationware) for you. VAC "
     L"Lite (\"Line 1\") also works.";
 constexpr wchar_t kTipCableLink[] = L"Opens the VB-Audio website.";
+constexpr wchar_t kTipCableChoice[] =
+    L"Which virtual cable receives your processed voice. You can choose when "
+    L"both VB-CABLE and VAC Lite are installed; the microphone to select in "
+    L"Discord (shown under Status) changes with it. Changing this while "
+    L"running restarts processing.";
 constexpr wchar_t kTipEchoCancellation[] =
     L"Removes the sound of your speakers from your microphone.\n\nLeave this "
     L"on unless you use headphones: with headphones there is no echo to "
-    L"remove, and turning it off avoids any processing artifacts. Applies "
-    L"instantly.";
+    L"remove, and turning it off avoids any processing artifacts.";
 constexpr wchar_t kTipEchoMode[] =
     L"Neural (Chrome model): adds the machine-learning residual echo "
     L"estimator that Chrome uses for its own echo cancellation; it removes "
@@ -165,8 +171,7 @@ constexpr wchar_t kTipNoise[] =
     L"of attenuation, so your voice stays natural.\n"
     L"RNNoise (full): strongest; removes the most noise but can eat parts of "
     L"your voice in noisy rooms. Recommended with Discord's Studio input "
-    L"mode, where Discord applies no noise suppression of its own.\n\n"
-    L"Applies instantly.";
+    L"mode, where Discord applies no noise suppression of its own.";
 constexpr wchar_t kTipMicrophoneMeter[] =
     L"Peak level of your raw microphone. When you speak normally, peaks "
     L"around \u221220 to \u22126 dB are ideal. Red means it is close to "
@@ -212,6 +217,8 @@ struct AppState {
   HWND microphone_combo = nullptr;
   HWND speakers_label = nullptr;
   HWND speakers_combo = nullptr;
+  HWND cable_label = nullptr;
+  HWND cable_combo = nullptr;
   HWND cable_text = nullptr;
   HWND cable_link = nullptr;
   // Processing.
@@ -248,11 +255,15 @@ struct AppState {
   // excluded: they can be neither the microphone nor the echo reference).
   std::vector<AudioDeviceInfo> microphones;
   std::vector<AudioDeviceInfo> speakers;
+  // Every detected virtual cable in preference order; `cable` is the one in
+  // use (the user's choice when available).
+  std::vector<VirtualCable> cables;
   VirtualCable cable;
   std::wstring device_error;
   // User choices from the registry; empty = follow the Windows default.
   std::wstring preferred_microphone_id;
   std::wstring preferred_speakers_id;
+  std::wstring preferred_cable;  // kCableSetting value; empty = preference.
 
   AudioEngine engine;
   EngineConfig running_config;  // Valid while the engine runs.
@@ -610,19 +621,76 @@ void UpdateIdleStatus(AppState* state) {
   }
 }
 
+const wchar_t* CableSettingValue(VirtualCableKind kind) {
+  switch (kind) {
+    case VirtualCableKind::kVbCable:
+      return L"vbcable";
+    case VirtualCableKind::kVacLite:
+      return L"vac";
+    case VirtualCableKind::kNone:
+      break;
+  }
+  return L"";
+}
+
+const wchar_t* CableKindName(VirtualCableKind kind) {
+  return kind == VirtualCableKind::kVbCable ? L"VB-CABLE" : L"VAC Lite";
+}
+
+// Uses the user's chosen cable when it is installed, otherwise the preferred
+// one (VB-CABLE before VAC Lite).
+void SelectCable(AppState* state) {
+  state->cable = VirtualCable{};
+  for (const VirtualCable& cable : state->cables) {
+    if (state->preferred_cable == CableSettingValue(cable.kind)) {
+      state->cable = cable;
+      return;
+    }
+  }
+  if (!state->cables.empty()) {
+    state->cable = state->cables.front();
+  }
+}
+
+void PopulateCableCombo(AppState* state) {
+  HWND combo = state->cable_combo;
+  SendMessageW(combo, WM_SETREDRAW, FALSE, 0);
+  SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+  int selection = 0;
+  for (size_t index = 0; index < state->cables.size(); ++index) {
+    const VirtualCable& cable = state->cables[index];
+    const std::wstring label =
+        std::wstring(CableKindName(cable.kind)) + L" \u2014 " +
+        cable.render_name;
+    SendMessageW(combo, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(label.c_str()));
+    if (cable.render_id == state->cable.render_id) {
+      selection = static_cast<int>(index);
+    }
+  }
+  if (state->cables.empty()) {
+    SendMessageW(combo, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(L"(none found)"));
+  }
+  SendMessageW(combo, CB_SETCURSEL, static_cast<WPARAM>(selection), 0);
+  // A choice only exists when more than one cable is installed.
+  EnableWindow(combo, state->cables.size() > 1);
+  SendMessageW(combo, WM_SETREDRAW, TRUE, 0);
+  InvalidateRect(combo, nullptr, TRUE);
+}
+
 void UpdateCableUi(AppState* state) {
+  PopulateCableCombo(state);
   std::wstring text;
   std::wstring link;
   switch (state->cable.kind) {
     case VirtualCableKind::kVbCable:
-      text = L"VB-CABLE detected. Your voice is played into " +
-             state->cable.render_name + L".";
+      text = L"Your voice is played into " + state->cable.render_name + L".";
       link = L"VB-CABLE is VB-Audio donationware \u2014 <a "
              L"href=\"https://www.vb-cable.com\">www.vb-cable.com</a>";
       break;
     case VirtualCableKind::kVacLite:
-      text = L"VAC Lite detected. Your voice is played into " +
-             state->cable.render_name + L".";
+      text = L"Your voice is played into " + state->cable.render_name + L".";
       break;
     case VirtualCableKind::kNone:
       text = L"No virtual cable found. Other apps hear this app through one; "
@@ -631,11 +699,13 @@ void UpdateCableUi(AppState* state) {
              L"\">Download VB-CABLE (vb-audio.com/Cable)</a>";
       break;
   }
+  if (state->cables.size() > 1) {
+    text += L" VB-CABLE and VAC Lite are both installed; choose above.";
+  }
   SetWindowTextW(state->cable_text, text.c_str());
   InvalidateRect(state->cable_text, nullptr, TRUE);
   SetWindowTextW(state->cable_link, link.c_str());
   ShowWindow(state->cable_link, link.empty() ? SW_HIDE : SW_SHOWNA);
-
   const std::wstring discord_name =
       state->cable.kind == VirtualCableKind::kNone
           ? std::wstring(L"(no virtual cable installed)")
@@ -792,23 +862,39 @@ void RefreshDevices(AppState* state) {
   std::vector<AudioDeviceInfo> render =
       EnumerateAudioDevices(eRender, &render_error);
   state->device_error = !capture_error.empty() ? capture_error : render_error;
-  state->cable = FindVirtualCable(render, capture);
+  state->cables = FindVirtualCables(render, capture);
+  SelectCable(state);
 
+  // No cable endpoint can be the microphone or the echo reference: a cable's
+  // capture side would feed back into itself, and the app plays into the
+  // render side rather than listening on it.
+  const auto is_cable_capture = [&](const AudioDeviceInfo& device) {
+    for (const VirtualCable& cable : state->cables) {
+      if (device.name == cable.capture_name) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const auto is_cable_render = [&](const AudioDeviceInfo& device) {
+    for (const VirtualCable& cable : state->cables) {
+      if (device.id == cable.render_id) {
+        return true;
+      }
+    }
+    return false;
+  };
   state->microphones.clear();
   for (AudioDeviceInfo& device : capture) {
-    if (state->cable.kind != VirtualCableKind::kNone &&
-        device.name == state->cable.capture_name) {
-      continue;  // The cable's own capture side would feed back into itself.
+    if (!is_cable_capture(device)) {
+      state->microphones.push_back(std::move(device));
     }
-    state->microphones.push_back(std::move(device));
   }
   state->speakers.clear();
   for (AudioDeviceInfo& device : render) {
-    if (state->cable.kind != VirtualCableKind::kNone &&
-        device.id == state->cable.render_id) {
-      continue;  // The cable is where the app plays, not what the user hears.
+    if (!is_cable_render(device)) {
+      state->speakers.push_back(std::move(device));
     }
-    state->speakers.push_back(std::move(device));
   }
 
   const bool running = state->engine.running();
@@ -850,9 +936,8 @@ void RefreshDevices(AppState* state) {
     return;
   }
   if (state->cable.render_id != state->running_config.cable_render_id) {
-    // A preferred cable appeared (e.g. VB-CABLE next to VAC Lite) or the old
-    // one vanished: follow what the UI shows.
-    RestartAudio(state, L"Switching to the detected virtual cable\u2026");
+    // The chosen cable changed or the old one vanished: follow the UI.
+    RestartAudio(state, L"Switching virtual cable\u2026");
   }
 }
 
@@ -879,6 +964,24 @@ void OnDeviceSelectionChanged(AppState* state, bool microphone) {
   if (device->id != running_id) {
     RestartAudio(state, microphone ? L"Switching microphone\u2026"
                                    : L"Switching speakers\u2026");
+  }
+}
+
+void OnCableSelectionChanged(AppState* state) {
+  const LRESULT index = SendMessageW(state->cable_combo, CB_GETCURSEL, 0, 0);
+  if (index < 0 || static_cast<size_t>(index) >= state->cables.size()) {
+    return;
+  }
+  state->preferred_cable = CableSettingValue(state->cables[index].kind);
+  WriteSetting(kCableSetting, state->preferred_cable);
+  SelectCable(state);
+  UpdateCableUi(state);
+  if (!state->engine.running()) {
+    UpdateIdleStatus(state);
+    return;
+  }
+  if (state->cable.render_id != state->running_config.cable_render_id) {
+    RestartAudio(state, L"Switching virtual cable\u2026");
   }
 }
 
@@ -1097,6 +1200,8 @@ void CreateControls(AppState* state) {
   state->microphone_combo = CreateCombo(state, kMicrophoneCombo);
   state->speakers_label = CreateLabel(state, L"Speakers (echo reference)");
   state->speakers_combo = CreateCombo(state, kSpeakersCombo);
+  state->cable_label = CreateLabel(state, L"Virtual cable (where your voice goes)");
+  state->cable_combo = CreateCombo(state, kCableCombo);
   state->cable_text = CreateLabel(state, L"", kCableText);
   state->cable_link =
       CreateChild(state, WC_LINK, L"", WS_TABSTOP, kCableLink);
@@ -1115,7 +1220,7 @@ void CreateControls(AppState* state) {
   state->levels_group = CreateGroup(state, L"Levels");
   state->microphone_meter_label = CreateLabel(state, L"Microphone");
   state->microphone_meter = CreateMeter(state, kMicrophoneMeter);
-  state->reference_meter_label = CreateLabel(state, L"Speakers (reference)");
+  state->reference_meter_label = CreateLabel(state, L"Speakers");
   state->reference_meter = CreateMeter(state, kReferenceMeter);
   state->output_meter_label = CreateLabel(state, L"Output");
   state->output_meter = CreateMeter(state, kOutputMeter);
@@ -1177,6 +1282,8 @@ void CreateTooltips(AppState* state) {
       {state->microphone_combo, kTipMicrophone},
       {state->speakers_label, kTipSpeakers},
       {state->speakers_combo, kTipSpeakers},
+      {state->cable_label, kTipCableChoice},
+      {state->cable_combo, kTipCableChoice},
       {state->cable_text, kTipCable},
       {state->cable_link, kTipCableLink},
       {state->echo_cancellation_check, kTipEchoCancellation},
@@ -1342,6 +1449,10 @@ SIZE Layout(AppState* state) {
     left.y += text + s(3);
     Place(state->speakers_combo, x, left.y, w, combo_drop);
     left.y += control + gap;
+    Place(state->cable_label, x, left.y, w, text);
+    left.y += text + s(3);
+    Place(state->cable_combo, x, left.y, w, combo_drop);
+    left.y += control + gap;
     Place(state->cable_text, x, left.y, w, 2 * text);
     left.y += 2 * text + s(2);
     Place(state->cable_link, x, left.y, w, text + s(2));
@@ -1435,6 +1546,7 @@ void ResizeWindowToLayout(AppState* state, const RECT* suggested) {
 void LoadSettingsIntoControls(AppState* state) {
   state->preferred_microphone_id = ReadSetting(kMicrophoneSetting);
   state->preferred_speakers_id = ReadSetting(kSpeakersSetting);
+  state->preferred_cable = ReadSetting(kCableSetting);
 
   const bool echo_cancellation =
       ReadBoolSetting(kEchoCancellationSetting, true);
@@ -1508,6 +1620,11 @@ void OnCommand(AppState* state, int id, int code) {
     case kSpeakersCombo:
       if (code == CBN_SELCHANGE) {
         OnDeviceSelectionChanged(state, id == kMicrophoneCombo);
+      }
+      return;
+    case kCableCombo:
+      if (code == CBN_SELCHANGE) {
+        OnCableSelectionChanged(state);
       }
       return;
     case kEchoCancellationCheck:
