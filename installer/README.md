@@ -27,11 +27,13 @@ ISCC.exe installer\AEC3VirtualMic.iss               # -> installer\Output\AEC3Vi
 
 | Situation | Behavior |
 | --- | --- |
-| VB-CABLE already installed | An info page says the existing VB-CABLE and its settings stay untouched. Setup doesn't install, configure or (later) uninstall it. |
-| VB-CABLE missing | A dedicated page says VB-CABLE will be installed, that it is VB-Audio donationware (all participations welcome), and links to www.vb-cable.com. Setup then installs it silently, writes `HKLM\Software\AEC3VirtualMic` `InstalledVbCable=1` (DWORD), keeps the pack in `{app}\vbcable` and runs `AEC3VirtualMic.exe --configure-vbcable` elevated. It does not ask for a restart: the cable works immediately (verified on Windows 11), only the lower latency waits for the next normal reboot. |
+| VB-CABLE already installed | An info page says the existing VB-CABLE and its settings stay untouched. Setup doesn't install or configure it. |
+| VB-CABLE missing, VAC Lite installed | A page with two options, "Use the installed VAC Lite" (default) and "Install VB-CABLE (VB-Audio donationware)". VAC Lite is detected by running the bundled exe with `--detect-cables` from Setup's temp folder (exit code bitmask: 1 = VB-CABLE, 2 = VAC Lite), i.e. with the app's own detection. |
+| VB-CABLE missing (and VAC Lite missing, or "Install VB-CABLE" chosen) | The page says VB-CABLE will be installed, that it is VB-Audio donationware (all participations welcome), and links to www.vb-cable.com. Setup then installs it silently, writes `HKLM\Software\AEC3VirtualMic` `InstalledVbCable=1` (DWORD) and runs `AEC3VirtualMic.exe --configure-vbcable` elevated. It does not ask for a restart: the cable works immediately (verified on Windows 11), only the lower latency waits for the next normal reboot. |
+| Always | The unmodified VB-CABLE pack is kept in `{app}\vbcable`, so the uninstaller can remove VB-CABLE on request even when Setup didn't install it. |
 | Task "Start AEC3 Virtual Mic with Windows" (unchecked by default) | Runs `AEC3VirtualMic.exe --enable-autostart` as the original (non-elevated) user. |
 | "Launch AEC3 Virtual Mic now" (finish page) | Starts the app as the original user. |
-| Uninstall | Closes a running app (mutex `AEC3VirtualMic.Running`, then `taskkill /F`). Removes the HKCU Run value `AEC3VirtualMic` and `HKCU\Software\AEC3VirtualMic` for every loaded user profile, removes `{localappdata}\AEC3VirtualMic` of the uninstalling user, runs `VBCABLE_Setup_x64.exe -u -h` **only** if the marker is present, deletes `HKLM\Software\AEC3VirtualMic`, and asks for a restart if VB-CABLE was removed. |
+| Uninstall | Closes a running app (mutex `AEC3VirtualMic.Running`, then `taskkill /F`). If VB-CABLE is installed, shows an "Also uninstall VB-CABLE" checkbox, checked by default only when the marker says Setup installed it (silent uninstalls use that default), and runs `VBCABLE_Setup_x64.exe -u -h` when checked. Removes the HKCU Run value `AEC3VirtualMic` and `HKCU\Software\AEC3VirtualMic` for every loaded user profile, removes `{localappdata}\AEC3VirtualMic` of the uninstalling user, deletes `HKLM\Software\AEC3VirtualMic`, and asks for a restart if VB-CABLE was removed. |
 
 When VB-CABLE is freshly installed, the [Run] order is:
 

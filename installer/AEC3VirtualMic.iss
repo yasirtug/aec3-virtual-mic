@@ -80,9 +80,9 @@ Name: "autostart"; Description: "Start {#AppName} with Windows"; Flags: unchecke
 Source: "{#RepoRoot}\bin\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoRoot}\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 Source: "{#RepoRoot}\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
-; The unmodified VB-CABLE driver pack. Kept in {app}\vbcable so the uninstaller
-; can remove the VB-CABLE that this installer installed.
-Source: "{#VbCableDir}\*"; Excludes: ".sha256"; DestDir: "{app}\vbcable"; Check: ShouldDeployVbCableFiles; Flags: ignoreversion
+; The unmodified VB-CABLE driver pack, always kept in {app}\vbcable: Setup runs
+; it to install VB-CABLE, and the uninstaller to remove VB-CABLE on request.
+Source: "{#VbCableDir}\*"; Excludes: ".sha256"; DestDir: "{app}\vbcable"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"
@@ -114,9 +114,12 @@ const
 
 var
   VbCablePresentAtStart: Boolean;
+  VacLitePresentAtStart: Boolean;
   MarkerPresentAtStart: Boolean;
   VbCableInstalledNow: Boolean;
   VbCableRemovedNow: Boolean;
+  RemoveVbCableChosen: Boolean;
+  CableChoicePage: TInputOptionWizardPage;
 
 // True when a VB-CABLE playback endpoint exists (active or disabled by the
 // user) or VB-CABLE's own uninstall entry is registered.
@@ -156,12 +159,8 @@ end;
 function ShouldInstallVbCable: Boolean;
 begin
   Result := not VbCablePresentAtStart;
-end;
-
-// Also refreshes the kept pack when an earlier setup of ours installed VB-CABLE.
-function ShouldDeployVbCableFiles: Boolean;
-begin
-  Result := (not VbCablePresentAtStart) or MarkerPresentAtStart;
+  if Result and VacLitePresentAtStart then
+    Result := CableChoicePage.Values[1];
 end;
 
 function VbCableInstalledBySetup: Boolean;
@@ -203,48 +202,26 @@ begin
   ShellExecAsOriginalUser('open', VbCableUrl, '', '', SW_SHOWNORMAL, ewNoWait, ErrorCode);
 end;
 
-procedure InitializeWizard;
+// Asks the app (same detection as at runtime) whether VAC Lite is active.
+function DetectVacLite: Boolean;
 var
-  Page: TWizardPage;
+  ResultCode: Integer;
+begin
+  Result := False;
+  ExtractTemporaryFile('{#AppExeName}');
+  if Exec(ExpandConstant('{tmp}\{#AppExeName}'), '--detect-cables', '', SW_HIDE,
+      ewWaitUntilTerminated, ResultCode) then
+    Result := (ResultCode and 2) <> 0
+  else
+    Log(Format('Cable detection failed to run: %d', [ResultCode]));
+  Log(Format('VAC Lite present: %d', [Ord(Result)]));
+end;
+
+procedure AddVbCableNotice(Page: TWizardPage; const Text: String);
+var
   Body: TNewStaticText;
   Link: TNewStaticText;
-  Text: String;
 begin
-  if VbCablePresentAtStart then
-  begin
-    Page := CreateCustomPage(wpSelectDir, 'Virtual audio cable',
-      'VB-CABLE is already installed.');
-    Text :=
-      'AEC3 Virtual Mic plays your processed voice into a virtual audio cable that apps ' +
-      'such as Discord, Zoom or OBS use as their microphone ("CABLE Output").' + #13#10#13#10 +
-      'VB-CABLE (VB-Audio Virtual Cable) is already installed on this computer. Setup uses it ' +
-      'as it is: the existing VB-CABLE and its settings are left untouched.';
-    if MarkerPresentAtStart then
-      Text := Text + #13#10#13#10 +
-        'It was installed by an earlier AEC3 Virtual Mic setup, so uninstalling ' +
-        'AEC3 Virtual Mic will also remove it.'
-    else
-      Text := Text + ' Uninstalling AEC3 Virtual Mic will not remove it.';
-    Text := Text + #13#10#13#10 +
-      'VB-CABLE is VB-Audio donationware; all participations are welcome:';
-  end
-  else
-  begin
-    Page := CreateCustomPage(wpSelectDir, 'Virtual audio cable',
-      'Setup will install VB-CABLE, the VB-Audio Virtual Cable.');
-    Text :=
-      'AEC3 Virtual Mic plays your processed voice into a virtual audio cable that apps ' +
-      'such as Discord, Zoom or OBS use as their microphone ("CABLE Output").' + #13#10#13#10 +
-      'No VB-CABLE was found, so Setup will install VB-CABLE by VB-Audio Software. ' +
-      'Windows may ask you to confirm the VB-Audio driver. No restart is needed; the cable ' +
-      'works right away. Setup configures it for voice (48 kHz, lower latency after the next ' +
-      'restart) and ' +
-      'keeps your default speakers and microphone. Uninstalling AEC3 Virtual Mic also ' +
-      'removes this VB-CABLE.' + #13#10#13#10 +
-      'VB-CABLE is donationware: free to use, and all participations are welcome. ' +
-      'If you find it useful, please support VB-Audio at:';
-  end;
-
   Body := TNewStaticText.Create(Page);
   Body.Parent := Page.Surface;
   Body.Left := 0;
@@ -264,10 +241,63 @@ begin
   Link.Font.Style := Link.Font.Style + [fsUnderline];
   Link.Font.Color := clHotLight;
   Link.OnClick := @OpenVbCableSite;
+end;
+
+procedure InitializeWizard;
+var
+  Text: String;
+begin
+  if VbCablePresentAtStart then
+  begin
+    Text :=
+      'AEC3 Virtual Mic plays your processed voice into a virtual audio cable that apps ' +
+      'such as Discord, Zoom or OBS use as their microphone ("CABLE Output").' + #13#10#13#10 +
+      'VB-CABLE (VB-Audio Virtual Cable) is already installed on this computer. Setup uses it ' +
+      'as it is: the existing VB-CABLE and its settings are left untouched.' + #13#10#13#10 +
+      'VB-CABLE is VB-Audio donationware; all participations are welcome:';
+    AddVbCableNotice(CreateCustomPage(wpSelectDir, 'Virtual audio cable',
+      'VB-CABLE is already installed.'), Text);
+  end
+  else
+  begin
+    VacLitePresentAtStart := DetectVacLite;
+    if VacLitePresentAtStart then
+    begin
+      CableChoicePage := CreateInputOptionPage(wpSelectDir, 'Virtual audio cable',
+        'Choose the virtual audio cable AEC3 Virtual Mic plays your voice into.', '',
+        True, False);
+      CableChoicePage.Add('Use the installed VAC Lite');
+      CableChoicePage.Add('Install VB-CABLE (VB-Audio donationware)');
+      CableChoicePage.Values[0] := True;
+    end
+    else
+    begin
+      Text :=
+        'AEC3 Virtual Mic plays your processed voice into a virtual audio cable that apps ' +
+        'such as Discord, Zoom or OBS use as their microphone ("CABLE Output").' + #13#10#13#10 +
+        'No virtual audio cable was found, so Setup will install VB-CABLE by VB-Audio ' +
+        'Software. Windows may ask you to confirm the VB-Audio driver.' + #13#10#13#10 +
+        'VB-CABLE is donationware: free to use, and all participations are welcome. ' +
+        'If you find it useful, please support VB-Audio at:';
+      AddVbCableNotice(CreateCustomPage(wpSelectDir, 'Virtual audio cable',
+        'Setup will install VB-CABLE, the VB-Audio Virtual Cable.'), Text);
+    end;
+  end;
 
   // The Ready memo carries longer explanatory lines.
   WizardForm.ReadyMemo.WordWrap := True;
   WizardForm.ReadyMemo.ScrollBars := ssVertical;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if (CurStep = ssInstall) and VacLitePresentAtStart and not VbCablePresentAtStart then
+  begin
+    if ShouldInstallVbCable then
+      Log('Cable choice: Install VB-CABLE')
+    else
+      Log('Cable choice: Use the installed VAC Lite');
+  end;
 end;
 
 function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo, MemoTypeInfo,
@@ -279,6 +309,8 @@ begin
   Result := Result + NewLine + NewLine + 'Virtual audio cable:' + NewLine + Space;
   if VbCablePresentAtStart then
     Result := Result + 'Use the installed VB-CABLE (left untouched)'
+  else if not ShouldInstallVbCable then
+    Result := Result + 'Use the installed VAC Lite'
   else
     Result := Result + 'Install VB-CABLE by VB-Audio (donationware, www.vb-cable.com)';
   Result := Result + NewLine + NewLine + 'Neural echo model (optional):' + NewLine + Space +
@@ -328,37 +360,75 @@ begin
   DelTree(ExpandConstant('{localappdata}\AEC3VirtualMic'), True, True, True);
 end;
 
-// Removes VB-CABLE only if this installer installed it (marker present).
-procedure RemoveOwnVbCable;
+// Asks whether to remove VB-CABLE too: checked by default only when this
+// installer installed it. Silent uninstalls use that default.
+function AskRemoveVbCable(Default: Boolean): Boolean;
+var
+  Form: TSetupForm;
+  Check: TNewCheckBox;
+  OkButton: TNewButton;
+begin
+  Result := Default;
+  if UninstallSilent then
+    Exit;
+  Form := CreateCustomForm(ScaleX(320), ScaleY(92), False, False);
+  try
+    Form.Caption := '{#AppName} Uninstall';
+
+    Check := TNewCheckBox.Create(Form);
+    Check.Parent := Form;
+    Check.Left := ScaleX(16);
+    Check.Top := ScaleY(18);
+    Check.Width := Form.ClientWidth - ScaleX(32);
+    Check.Height := ScaleY(17);
+    Check.Caption := 'Also uninstall VB-CABLE';
+    Check.Checked := Default;
+
+    OkButton := TNewButton.Create(Form);
+    OkButton.Parent := Form;
+    OkButton.Width := ScaleX(75);
+    OkButton.Height := ScaleY(23);
+    OkButton.Left := Form.ClientWidth - OkButton.Width - ScaleX(16);
+    OkButton.Top := Form.ClientHeight - OkButton.Height - ScaleY(14);
+    OkButton.Caption := 'OK';
+    OkButton.ModalResult := mrOk;
+    OkButton.Default := True;
+
+    Form.ActiveControl := OkButton;
+    if Form.ShowModal = mrOk then
+      Result := Check.Checked;
+  finally
+    Form.Free;
+  end;
+end;
+
+procedure RemoveVbCable;
 var
   SetupExe: String;
   ResultCode: Integer;
 begin
-  if not IsMarkerPresent then
+  if not RemoveVbCableChosen then
   begin
-    Log('VB-CABLE was not installed by AEC3 Virtual Mic; leaving it untouched.');
+    Log('Leaving VB-CABLE installed.');
     Exit;
   end;
-  if IsVbCableInstalled then
+  SetupExe := ExpandConstant('{app}\vbcable\VBCABLE_Setup_x64.exe');
+  if FileExists(SetupExe) then
   begin
-    SetupExe := ExpandConstant('{app}\vbcable\VBCABLE_Setup_x64.exe');
-    if FileExists(SetupExe) then
+    UninstallProgressForm.StatusLabel.Caption := 'Removing VB-CABLE (VB-Audio Virtual Cable)...';
+    if Exec(SetupExe, '-u -h', ExtractFileDir(SetupExe), SW_SHOWNORMAL,
+        ewWaitUntilTerminated, ResultCode) then
     begin
-      UninstallProgressForm.StatusLabel.Caption := 'Removing VB-CABLE (VB-Audio Virtual Cable)...';
-      if Exec(SetupExe, '-u -h', ExtractFileDir(SetupExe), SW_SHOWNORMAL,
-          ewWaitUntilTerminated, ResultCode) then
-      begin
-        Log(Format('VB-CABLE uninstall exit code: %d', [ResultCode]));
-        VbCableRemovedNow := True;
-      end
-      else
-        Log(Format('Could not run the VB-CABLE uninstaller: %d', [ResultCode]));
+      Log(Format('VB-CABLE uninstall exit code: %d', [ResultCode]));
+      VbCableRemovedNow := True;
     end
     else
-      SuppressibleMsgBox('The VB-CABLE setup program is missing, so VB-CABLE could not be ' +
-        'removed automatically. You can remove it with VBCABLE_Setup_x64.exe from ' +
-        VbCableUrl + '.', mbInformation, MB_OK, IDOK);
-  end;
+      Log(Format('Could not run the VB-CABLE uninstaller: %d', [ResultCode]));
+  end
+  else
+    SuppressibleMsgBox('The VB-CABLE setup program is missing, so VB-CABLE could not be ' +
+      'removed automatically. You can remove it with VBCABLE_Setup_x64.exe from ' +
+      VbCableUrl + '.', mbInformation, MB_OK, IDOK);
   RegDeleteValue(HKLM64, MarkerKey, MarkerValue);
 end;
 
@@ -366,11 +436,17 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   case CurUninstallStep of
     usAppMutexCheck:
-      CloseRunningApp;
+      begin
+        CloseRunningApp;
+        RemoveVbCableChosen := False;
+        if IsVbCableInstalled then
+          RemoveVbCableChosen := AskRemoveVbCable(IsMarkerPresent);
+        Log(Format('Remove VB-CABLE: %d (installed by us: %d)', [Ord(RemoveVbCableChosen), Ord(IsMarkerPresent)]));
+      end;
     usUninstall:
       begin
         RemoveUserSettings;
-        RemoveOwnVbCable;
+        RemoveVbCable;
         RegDeleteKeyIncludingSubkeys(HKLM64, MarkerKey);
       end;
   end;

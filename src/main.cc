@@ -93,7 +93,7 @@ constexpr NoiseModeOption kNoiseModeOptions[] = {
     {L"RNNoise (full)", NoiseSuppressionMode::kRnnoiseFull},
 };
 constexpr NoiseSuppressionMode kDefaultNoiseMode =
-    NoiseSuppressionMode::kWebRtcHigh;
+    NoiseSuppressionMode::kRnnoiseFull;
 
 // Echo suppression dropdown order.
 constexpr const wchar_t* kEchoModeLabels[] = {
@@ -1843,6 +1843,7 @@ struct CommandLine {
   bool enable_autostart = false;
   bool configure_vbcable = false;
   bool snapshot_audio_defaults = false;
+  bool detect_cables = false;
 };
 
 CommandLine ParseCommandLine() {
@@ -1855,6 +1856,8 @@ CommandLine ParseCommandLine() {
   for (int index = 1; index < count; ++index) {
     if (_wcsicmp(arguments[index], L"--startup") == 0) {
       result.startup = true;
+    } else if (_wcsicmp(arguments[index], L"--detect-cables") == 0) {
+      result.detect_cables = true;
     } else if (_wcsicmp(arguments[index], L"--enable-autostart") == 0) {
       result.enable_autostart = true;
     } else if (_wcsicmp(arguments[index], L"--configure-vbcable") == 0) {
@@ -1875,6 +1878,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
   // Installer helpers: no UI, no single-instance mutex, no window.
   if (command_line.configure_vbcable) {
     return ConfigureFreshVbCable();
+  }
+  if (command_line.detect_cables) {
+    return DetectVirtualCables();
   }
   if (command_line.snapshot_audio_defaults) {
     return SnapshotAudioDefaults();

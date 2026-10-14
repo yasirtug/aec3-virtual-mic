@@ -1,5 +1,7 @@
 #include "vbcable_setup.h"
 
+#include "audio_devices.h"
+
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <mmreg.h>
@@ -355,6 +357,26 @@ void EnsureEndpointRate(IPolicyConfig* policy, const std::wstring& id) {
 }
 
 }  // namespace
+
+int DetectVirtualCables() {
+  ComScope com;
+  if (!com.usable()) {
+    return 0;
+  }
+  const std::vector<AudioDeviceInfo> render =
+      EnumerateAudioDevices(eRender, nullptr);
+  const std::vector<AudioDeviceInfo> capture =
+      EnumerateAudioDevices(eCapture, nullptr);
+  int detected = 0;
+  for (const VirtualCable& cable : FindVirtualCables(render, capture)) {
+    if (cable.kind == VirtualCableKind::kVbCable) {
+      detected |= kDetectedVbCable;
+    } else if (cable.kind == VirtualCableKind::kVacLite) {
+      detected |= kDetectedVacLite;
+    }
+  }
+  return detected;
+}
 
 int SnapshotAudioDefaults() {
   ComScope com;

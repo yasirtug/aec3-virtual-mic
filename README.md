@@ -37,13 +37,14 @@ Speakers  ──┘   (loopback = echo reference)                               
 
 1. Download `AEC3VirtualMic-Setup-<version>.exe` from the
    [Releases](../../releases) page and run it.
-2. If VB-CABLE is not installed yet, the installer tells you so and installs it along with the
-   app. VB-CABLE is donationware by VB-Audio Software; see https://www.vb-cable.com.
-   An existing VB-CABLE installation is detected and left untouched.
+2. If no VB-CABLE is installed, the installer tells you so and installs it along with the app.
+   VB-CABLE is donationware by VB-Audio Software; see https://www.vb-cable.com. If you already
+   have VAC Lite, you can use it instead. An existing VB-CABLE installation is detected and left
+   untouched.
 3. Optionally enable starting with Windows (off by default; you can change this later in the app).
 
-Uninstalling removes the app, its settings and its autostart entry. VB-CABLE is removed only if
-this installer installed it.
+Uninstalling removes the app, its settings and its autostart entry, and offers to remove
+VB-CABLE as well (pre-selected only if this installer installed it).
 
 Requires 64-bit Windows 10 or 11.
 
