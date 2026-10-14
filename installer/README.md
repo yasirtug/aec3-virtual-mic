@@ -31,6 +31,8 @@ ISCC.exe installer\AEC3VirtualMic.iss                                           
 | A virtual cable is installed (VAC of any edition, or VB-CABLE) | Setup uses it and installs no cable; no extra page. Detection runs the bundled exe with `--detect-cables` from Setup's temp folder (exit code bitmask: 1 = VB-CABLE, 2 = VAC), i.e. with the app's own detection. |
 | No virtual cable | A page says Setup will run the setup of Virtual Audio Cable Lite, that VAC Lite is free for use in a private home environment not associated with income generation, and links to vac.muzychenko.net. The unmodified package is unpacked to Setup's temp folder and VAC's own setup window runs (`setup64.exe`, `setup64a.exe` on ARM64). If VAC Lite's uninstall entry exists afterwards, Setup writes `HKLM\Software\AEC3VirtualMic` `InstalledVacLite=1` (DWORD); otherwise it explains how to install a cable manually. |
 | Task "Start AEC3 Virtual Mic with Windows" (unchecked by default) | Runs `AEC3VirtualMic.exe --enable-autostart` as the original (non-elevated) user. |
+| "Launch AEC3 Virtual Mic now" (finish page) | Starts the app as the original user. |
+| Uninstall | Closes a running app (mutex `AEC3VirtualMic.Running`, then `taskkill /F`). If VAC Lite is installed, shows an "Also uninstall Virtual Audio Cable Lite" checkbox, checked by default only when the marker says Setup installed it, and runs VAC's own uninstaller (its registered `UninstallString`, `"…\setup64.exe" -u`) when checked. VAC has no documented silent uninstall, so silent uninstalls leave it installed. Removes the HKCU Run value `AEC3VirtualMic` and `HKCU\Software\AEC3VirtualMic` for every loaded user profile, removes `{localappdata}\AEC3VirtualMic` of the uninstalling user, and deletes `HKLM\Software\AEC3VirtualMic`. |
 
 On a fresh VAC Lite install, Setup also writes the documented per-cable setting
 `HKLM\SOFTWARE\EuMus Design\Virtual Audio Cable\4\Cable 1` `Volume control = 1` (DWORD) before VAC's
@@ -41,8 +43,6 @@ it gives "Line 1" a working volume slider in Windows (−40..+12 dB). An existin
 
 VAC's `setup64.exe -u` hands the work to another process and returns at once, so the uninstaller
 starts it through `powershell Start-Process -Wait`, which also waits for that child.
-| "Launch AEC3 Virtual Mic now" (finish page) | Starts the app as the original user. |
-| Uninstall | Closes a running app (mutex `AEC3VirtualMic.Running`, then `taskkill /F`). If VAC Lite is installed, shows an "Also uninstall Virtual Audio Cable Lite" checkbox, checked by default only when the marker says Setup installed it, and runs VAC's own uninstaller (its registered `UninstallString`, `"…\setup64.exe" -u`) when checked. VAC has no documented silent uninstall, so silent uninstalls leave it installed. Removes the HKCU Run value `AEC3VirtualMic` and `HKCU\Software\AEC3VirtualMic` for every loaded user profile, removes `{localappdata}\AEC3VirtualMic` of the uninstalling user, and deletes `HKLM\Software\AEC3VirtualMic`. |
 
 When VAC Lite is installed, the [Run] order is:
 
