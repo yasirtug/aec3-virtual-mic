@@ -2,13 +2,8 @@
 
 Tired of Discord's unreliable noise/echo cancellation on desktop? Want something stable & better?
 
-\
-\
-\
-\
 If you want to experience superior echo cancellation right now & you have Chrome, open a voice recorder website on a tab, play some music in another tab, and talk over the playing music while recording. You'll see music sound is perfectly getting canceled out by the Chrome.
 
-\
 So this project is to replicate that, but system wide.
 
 It captures your physical microphone, uses what your speakers are playing as the echo reference,
