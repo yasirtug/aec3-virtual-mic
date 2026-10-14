@@ -1,8 +1,13 @@
 # AEC3 Virtual Mic
 
-A Windows tray app that removes the sound of your own speakers from your microphone, so you can
-talk on Discord (or any other voice app) without headphones and without the other side hearing
-themselves.
+Tired of Discord's unreliable noise/echo cancellation on desktop? Want something stable&better?\
+\
+If you want to experience superior echo cancellation right now & if you have Chrome, open a voice recorder website on a tab, play a music from another tab, and talk over the playing music while recording. You'll see music sound is perfectly getting canceled out by the Chrome.
+
+\
+So this project is to replicate that, but system wide.
+
+If you are using voice chats app on your speaker, then this is for you.
 
 It captures your physical microphone, uses what your speakers are playing as the echo reference,
 runs the result through WebRTC's audio processing (the AEC3 echo canceller used by Chrome), and
@@ -60,13 +65,10 @@ Requires 64-bit Windows 10 or 11.
 
 Tips:
 
-- Turn off Discord's own echo cancellation and noise suppression (including Krisp) so your
-  voice is not processed twice.
+- Switch Discord's Input Profile to Studio so your voice doesn't get processed twice.
 - Keep Discord's output device the same as the speakers selected in the app.
 - If something fails (for example a device is unplugged), the app stops and shows the reason.
   Press **Start** again once the problem is fixed.
-
-Settings are stored per user in `HKCU\Software\AEC3VirtualMic`.
 
 ## About the neural echo model
 
