@@ -40,8 +40,6 @@ constexpr UINT_PTR kLevelTimer = 1;
 constexpr UINT kLevelTimerMs = 66;  // ~15 Hz.
 constexpr UINT_PTR kDeviceRefreshTimer = 2;
 constexpr UINT kDeviceRefreshDelayMs = 400;  // Coalesces bursts of changes.
-constexpr UINT_PTR kCopyFeedbackTimer = 3;
-constexpr UINT kCopyFeedbackMs = 1500;
 constexpr ULONGLONG kClipWarningHoldMs = 3000;
 
 constexpr UINT kTrayIconId = 1;
@@ -58,7 +56,6 @@ enum ControlId : int {
   kStatusText,
   kStatusDetail,
   kDiscordName,
-  kCopyNameButton,
   kMicrophoneCombo,
   kSpeakersCombo,
   kCableText,
@@ -118,9 +115,9 @@ constexpr wchar_t kTipDiscordName[] =
     L"Other apps hear this app through the virtual cable. In Discord (User "
     L"Settings \u2192 Voice & Video \u2192 Input Device), Zoom, Teams, OBS, "
     L"etc., select exactly this device as your microphone.\n\nDo not select "
-    L"your real microphone there, or echo cancellation is bypassed.";
-constexpr wchar_t kTipCopyName[] =
-    L"Copy the device name to the clipboard.";
+    L"your real microphone there, or echo cancellation is bypassed.\n\n"
+    L"Using Discord's Studio input mode (no Discord processing)? Set Noise "
+    L"suppression here to RNNoise (full).";
 constexpr wchar_t kTipMicrophone[] =
     L"Your real, physical microphone. The app captures it, removes echo and "
     L"noise, and sends the result to the virtual cable.";
@@ -167,7 +164,9 @@ constexpr wchar_t kTipNoise[] =
     L"RNNoise (gentle / medium): neural noise removal capped at 12 or 20 dB "
     L"of attenuation, so your voice stays natural.\n"
     L"RNNoise (full): strongest; removes the most noise but can eat parts of "
-    L"your voice in noisy rooms.\n\nApplies instantly.";
+    L"your voice in noisy rooms. Recommended with Discord's Studio input "
+    L"mode, where Discord applies no noise suppression of its own.\n\n"
+    L"Applies instantly.";
 constexpr wchar_t kTipMicrophoneMeter[] =
     L"Peak level of your raw microphone. When you speak normally, peaks "
     L"around \u221220 to \u22126 dB are ideal. Red means it is close to "
@@ -207,7 +206,6 @@ struct AppState {
   HWND start_stop_button = nullptr;
   HWND discord_label = nullptr;
   HWND discord_name = nullptr;
-  HWND copy_name_button = nullptr;
   // Devices.
   HWND devices_group = nullptr;
   HWND microphone_label = nullptr;
@@ -243,6 +241,7 @@ struct AppState {
   UINT dpi = USER_DEFAULT_SCREEN_DPI;
   HFONT font = nullptr;
   HFONT status_font = nullptr;
+  HFONT emphasis_font = nullptr;  // Semibold body text (device name to pick).
   int text_height = 16;
 
   // Devices shown in the combos (the virtual cable's own endpoints are
@@ -326,29 +325,6 @@ void OpenLink(HWND owner, const wchar_t* href) {
     return;
   }
   ShellExecuteW(owner, L"open", href, nullptr, nullptr, SW_SHOWNORMAL);
-}
-
-bool CopyToClipboard(HWND owner, const std::wstring& text) {
-  if (!OpenClipboard(owner)) {
-    return false;
-  }
-  EmptyClipboard();
-  bool copied = false;
-  const size_t bytes = (text.size() + 1) * sizeof(wchar_t);
-  HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
-  if (memory != nullptr) {
-    void* destination = GlobalLock(memory);
-    if (destination != nullptr) {
-      std::memcpy(destination, text.c_str(), bytes);
-      GlobalUnlock(memory);
-      copied = SetClipboardData(CF_UNICODETEXT, memory) != nullptr;
-    }
-    if (!copied) {
-      GlobalFree(memory);
-    }
-  }
-  CloseClipboard();
-  return copied;
 }
 
 // ---------------------------------------------------------------------------
@@ -1110,11 +1086,11 @@ void CreateControls(AppState* state) {
   state->status_detail = CreateLabel(state, L"", kStatusDetail);
   state->discord_label = CreateLabel(
       state, L"In Discord and other apps, select this microphone:");
-  state->discord_name = CreateChild(
-      state, WC_EDITW, L"", WS_TABSTOP | ES_AUTOHSCROLL | ES_READONLY,
-      kDiscordName, WS_EX_CLIENTEDGE);
-  state->copy_name_button =
-      CreateButton(state, L"Copy name", kCopyNameButton);
+  // Plain text, not an edit box: nothing to type or copy, just read it.
+  state->discord_name =
+      CreateChild(state, WC_STATICW, L"",
+                  SS_LEFT | SS_NOPREFIX | SS_ENDELLIPSIS | SS_NOTIFY,
+                  kDiscordName);
 
   state->devices_group = CreateGroup(state, L"Devices");
   state->microphone_label = CreateLabel(state, L"Microphone");
@@ -1197,7 +1173,6 @@ void CreateTooltips(AppState* state) {
       {state->start_stop_button, kTipStartStop},
       {state->discord_label, kTipDiscordName},
       {state->discord_name, kTipDiscordName},
-      {state->copy_name_button, kTipCopyName},
       {state->microphone_label, kTipMicrophone},
       {state->microphone_combo, kTipMicrophone},
       {state->speakers_label, kTipSpeakers},
@@ -1250,10 +1225,15 @@ void ApplyFonts(AppState* state) {
   large.lfHeight = MulDiv(base.lfHeight, 8, 5);
   large.lfWeight = FW_SEMIBOLD;
   HFONT status_font = CreateFontIndirectW(&large);
+  LOGFONTW emphasis = base;
+  emphasis.lfWeight = FW_SEMIBOLD;
+  HFONT emphasis_font = CreateFontIndirectW(&emphasis);
 
   EnumChildWindows(state->window, SetChildFont, reinterpret_cast<LPARAM>(font));
   SendMessageW(state->status_text, WM_SETFONT,
                reinterpret_cast<WPARAM>(status_font), FALSE);
+  SendMessageW(state->discord_name, WM_SETFONT,
+               reinterpret_cast<WPARAM>(emphasis_font), FALSE);
   if (state->tooltip != nullptr) {
     SendMessageW(state->tooltip, WM_SETFONT, reinterpret_cast<WPARAM>(font),
                  FALSE);
@@ -1266,8 +1246,12 @@ void ApplyFonts(AppState* state) {
   if (state->status_font != nullptr) {
     DeleteObject(state->status_font);
   }
+  if (state->emphasis_font != nullptr) {
+    DeleteObject(state->emphasis_font);
+  }
   state->font = font;
   state->status_font = status_font;
+  state->emphasis_font = emphasis_font;
 
   HDC dc = GetDC(state->window);
   HGDIOBJ old_font = SelectObject(dc, font);
@@ -1345,11 +1329,8 @@ SIZE Layout(AppState* state) {
     left.y += 3 * text + gap;
     Place(state->discord_label, x, left.y, w, text);
     left.y += text + small_gap;
-    const int copy_width = s(96);
-    Place(state->discord_name, x, left.y, w - copy_width - gap, control);
-    Place(state->copy_name_button, x + w - copy_width, left.y, copy_width,
-          control);
-    left.y += control;
+    Place(state->discord_name, x, left.y, w, text);
+    left.y += text;
     end_group(left, state->status_group);
 
     begin_group(left);
@@ -1523,18 +1504,6 @@ void OnCommand(AppState* state, int id, int code) {
         ToggleAudio(state);
       }
       return;
-    case kCopyNameButton:
-      if (code == BN_CLICKED) {
-        if (state->cable.kind != VirtualCableKind::kNone &&
-            CopyToClipboard(state->window, state->cable.capture_name)) {
-          SetWindowTextW(state->copy_name_button, L"Copied");
-          SetTimer(state->window, kCopyFeedbackTimer, kCopyFeedbackMs,
-                   nullptr);
-        } else {
-          MessageBeep(MB_ICONWARNING);
-        }
-      }
-      return;
     case kMicrophoneCombo:
     case kSpeakersCombo:
       if (code == CBN_SELCHANGE) {
@@ -1679,9 +1648,6 @@ LRESULT CALLBACK WindowProcedure(HWND window,
       } else if (wparam == kDeviceRefreshTimer) {
         KillTimer(window, kDeviceRefreshTimer);
         RefreshDevices(state);
-      } else if (wparam == kCopyFeedbackTimer) {
-        KillTimer(window, kCopyFeedbackTimer);
-        SetWindowTextW(state->copy_name_button, L"Copy name");
       }
       return 0;
     case WM_SHOWWINDOW:
@@ -1731,7 +1697,6 @@ LRESULT CALLBACK WindowProcedure(HWND window,
       state->device_notifier.Stop();
       KillTimer(window, kLevelTimer);
       KillTimer(window, kDeviceRefreshTimer);
-      KillTimer(window, kCopyFeedbackTimer);
       ++state->engine_session;
       state->engine.Stop();
       RemoveTrayIcon(state);
