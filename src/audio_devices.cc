@@ -253,12 +253,20 @@ std::vector<VirtualCable> FindVirtualCables(
     cable.capture_name = CaptureNameFor(device->name, capture);
     cables.push_back(std::move(cable));
   };
+  // VAC Lite first: it adds far less latency than VB-CABLE (~19 ms vs ~80 ms
+  // end to end, see installer/README.md).
+  if (vac_lite != nullptr || other_vac != nullptr) {
+    add(VirtualCableKind::kVacLite, vac_lite != nullptr ? vac_lite : other_vac);
+  }
   if (vb_cable != nullptr || vb_cable_variant != nullptr) {
     add(VirtualCableKind::kVbCable,
         vb_cable != nullptr ? vb_cable : vb_cable_variant);
   }
-  if (vac_lite != nullptr || other_vac != nullptr) {
-    add(VirtualCableKind::kVacLite, vac_lite != nullptr ? vac_lite : other_vac);
-  }
   return cables;
+}
+
+bool IsVirtualCableEndpointName(const std::wstring& friendly_name) {
+  const std::wstring name = Lowercase(friendly_name);
+  return Contains(name, L"virtual audio cable") ||
+         Contains(name, L"vb-audio");
 }

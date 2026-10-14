@@ -1,4 +1,4 @@
-#include "vbcable_setup.h"
+#include "cable_setup.h"
 
 #include "audio_devices.h"
 
@@ -9,11 +9,7 @@
 
 #include <cwchar>
 #include <string>
-#include <utility>
 #include <vector>
-
-// How the values below were chosen is documented (with sources) in
-// installer/README.md, section "Recommended VB-CABLE settings".
 
 namespace {
 
@@ -24,45 +20,15 @@ constexpr int kExitOk = 0;
 constexpr int kExitComFailed = 1;
 constexpr int kExitSnapshotFailed = 3;
 
-// HKLM key of our installer (also holds the `InstalledVbCable` marker).
+// HKLM key of our installer; holds the transient snapshot (and the installer's
+// `InstalledVacLite` marker).
 constexpr wchar_t kInstallerKey[] = L"Software\\AEC3VirtualMic";
-
-// VB-CABLE's own driver parameters (HKLM\Software\VB-Audio\Cable) are left
-// alone: its setup already selects 48 kHz, and lowering
-// VBAudioCableWDM_Latency measured no latency change, even after a reboot
-// (see installer/README.md).
-
-// Adapter name of the VB-CABLE endpoints ("CABLE Input", "CABLE In 16ch",
-// "CABLE Output"), from the driver INF.
-constexpr wchar_t kVbCableAdapterName[] = L"VB-Audio Virtual Cable";
-// Endpoint names whose default format must be 48 kHz.
-constexpr wchar_t kCableInputName[] = L"CABLE Input";
-constexpr wchar_t kCableOutputName[] = L"CABLE Output";
-constexpr DWORD kTargetSampleRate = 48000;
-constexpr DWORD kStereoMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
-
-// Defined locally (values from functiondiscoverykeys_devpkey.h) so no extra
-// GUID library is needed.
-// PKEY_DeviceInterface_FriendlyName: adapter name, "VB-Audio Virtual Cable".
-constexpr PROPERTYKEY kAdapterNameKey = {
-    {0x026e516e,
-     0xb814,
-     0x414b,
-     {0x83, 0xcd, 0x85, 0x6d, 0x6f, 0xef, 0x48, 0x22}},
-    2};
-// PKEY_Device_DeviceDesc: endpoint name, e.g. "CABLE Input".
-constexpr PROPERTYKEY kEndpointNameKey = {
-    {0xa45c254e,
-     0xdf1c,
-     0x4efd,
-     {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}},
-    2};
 
 constexpr ERole kRoles[] = {eConsole, eMultimedia, eCommunications};
 
 // Undocumented but long-stable interface used by the Windows Sound control
-// panel (Windows 7 and later) to change default endpoints and device formats.
-// Only the methods called here matter; the vtable order must match.
+// panel (Windows 7 and later) to change default endpoints. Only
+// SetDefaultEndpoint is called; the vtable order must still match.
 MIDL_INTERFACE("f8679f50-850a-41cf-9c72-430f290290c8")
 IPolicyConfig : public IUnknown {
  public:
@@ -105,17 +71,6 @@ constexpr CLSID kPolicyConfigClsid = {
     0x4f9e,
     {0xaf, 0x0d, 0xe6, 0x3d, 0xf4, 0x0c, 0x2b, 0xc9}};
 
-constexpr GUID kSubtypePcm = {
-    0x00000001,
-    0x0000,
-    0x0010,
-    {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
-constexpr GUID kSubtypeFloat = {
-    0x00000003,
-    0x0000,
-    0x0010,
-    {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
-
 class ComScope {
  public:
   ComScope() : result_(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)) {}
@@ -152,60 +107,24 @@ std::wstring EndpointId(IMMDevice* device) {
   return result;
 }
 
-std::wstring StringProperty(IMMDevice* device, const PROPERTYKEY& key) {
-  ComPtr<IPropertyStore> store;
-  if (FAILED(device->OpenPropertyStore(STGM_READ, &store))) {
-    return {};
+// Ids of the active virtual cable endpoints (VAC or VB-CABLE) for `flow`.
+std::vector<std::wstring> CableEndpointIds(EDataFlow flow) {
+  std::vector<std::wstring> ids;
+  for (const AudioDeviceInfo& device : EnumerateAudioDevices(flow, nullptr)) {
+    if (IsVirtualCableEndpointName(device.name)) {
+      ids.push_back(device.id);
+    }
   }
-  PROPVARIANT value;
-  PropVariantInit(&value);
-  std::wstring result;
-  if (SUCCEEDED(store->GetValue(key, &value)) && value.vt == VT_LPWSTR &&
-      value.pwszVal != nullptr) {
-    result = value.pwszVal;
-  }
-  PropVariantClear(&value);
-  return result;
+  return ids;
 }
 
-struct CableEndpoint {
-  std::wstring id;
-  std::wstring endpoint_name;  // e.g. "CABLE Input"
-};
-
-// Active endpoints of the plain VB-CABLE driver for `flow`.
-std::vector<CableEndpoint> FindCableEndpoints(IMMDeviceEnumerator* enumerator,
-                                              EDataFlow flow) {
-  std::vector<CableEndpoint> result;
-  ComPtr<IMMDeviceCollection> collection;
-  if (FAILED(enumerator->EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE,
-                                            &collection))) {
-    return result;
-  }
-  UINT count = 0;
-  if (FAILED(collection->GetCount(&count))) {
-    return result;
-  }
-  for (UINT i = 0; i < count; ++i) {
-    ComPtr<IMMDevice> device;
-    if (FAILED(collection->Item(i, &device))) {
-      continue;
-    }
-    const std::wstring adapter =
-        StringProperty(device.Get(), kAdapterNameKey);
-    if (CompareStringOrdinal(adapter.c_str(), -1, kVbCableAdapterName, -1,
-                             TRUE) != CSTR_EQUAL) {
-      continue;
-    }
-    CableEndpoint endpoint;
-    endpoint.id = EndpointId(device.Get());
-    endpoint.endpoint_name =
-        StringProperty(device.Get(), kEndpointNameKey);
-    if (!endpoint.id.empty()) {
-      result.push_back(std::move(endpoint));
+bool Contains(const std::vector<std::wstring>& ids, const std::wstring& id) {
+  for (const std::wstring& candidate : ids) {
+    if (candidate == id) {
+      return true;
     }
   }
-  return result;
+  return false;
 }
 
 bool IsActiveEndpoint(IMMDeviceEnumerator* enumerator,
@@ -233,94 +152,31 @@ std::wstring ReadSnapshot(HKEY key, EDataFlow flow, ERole role) {
   return value;
 }
 
-bool ContainsId(const std::vector<CableEndpoint>& endpoints,
-                const std::wstring& id) {
-  for (const CableEndpoint& endpoint : endpoints) {
-    if (endpoint.id == id) {
-      return true;
-    }
-  }
-  return false;
-}
-
-// Gives every role whose default is now a CABLE endpoint back to the endpoint
-// recorded before VB-CABLE was installed (when that endpoint is still active).
+// Gives every role whose default is now a cable endpoint back to the endpoint
+// recorded before the cable was installed (when that endpoint is still
+// active and is not a cable itself).
 void RestoreDefaults(IMMDeviceEnumerator* enumerator,
                      IPolicyConfig* policy,
                      HKEY snapshot_key) {
   for (EDataFlow flow : {eRender, eCapture}) {
-    const std::vector<CableEndpoint> cables =
-        FindCableEndpoints(enumerator, flow);
+    const std::vector<std::wstring> cables = CableEndpointIds(flow);
     if (cables.empty()) {
       continue;
     }
     for (ERole role : kRoles) {
       ComPtr<IMMDevice> current;
-      if (FAILED(enumerator->GetDefaultAudioEndpoint(flow, role, &current))) {
-        continue;
-      }
-      if (!ContainsId(cables, EndpointId(current.Get()))) {
+      if (FAILED(enumerator->GetDefaultAudioEndpoint(flow, role, &current)) ||
+          !Contains(cables, EndpointId(current.Get()))) {
         continue;
       }
       const std::wstring previous = ReadSnapshot(snapshot_key, flow, role);
-      if (previous.empty() || ContainsId(cables, previous) ||
+      if (previous.empty() || Contains(cables, previous) ||
           !IsActiveEndpoint(enumerator, previous)) {
         continue;
       }
       policy->SetDefaultEndpoint(previous.c_str(), role);
     }
   }
-}
-
-// Makes the endpoint's shared-mode device format 48 kHz when it is not.
-// Keeps the channel count; uses 24-bit PCM like the driver's OEM default.
-void EnsureEndpointRate(IPolicyConfig* policy, const std::wstring& id) {
-  WAVEFORMATEX* current = nullptr;
-  if (FAILED(policy->GetDeviceFormat(id.c_str(), FALSE, &current)) ||
-      current == nullptr) {
-    return;
-  }
-  const bool already_ok = current->nSamplesPerSec == kTargetSampleRate;
-  WORD channels = current->nChannels;
-  DWORD channel_mask = kStereoMask;
-  if (current->wFormatTag == WAVE_FORMAT_EXTENSIBLE &&
-      current->cbSize >= sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)) {
-    channel_mask =
-        reinterpret_cast<WAVEFORMATEXTENSIBLE*>(current)->dwChannelMask;
-  }
-  CoTaskMemFree(current);
-  if (already_ok) {
-    return;
-  }
-  if (channels == 0) {
-    channels = 2;
-    channel_mask = kStereoMask;
-  }
-
-  WAVEFORMATEXTENSIBLE device_format = {};
-  device_format.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
-  device_format.Format.nChannels = channels;
-  device_format.Format.nSamplesPerSec = kTargetSampleRate;
-  device_format.Format.wBitsPerSample = 24;
-  device_format.Format.nBlockAlign = static_cast<WORD>(channels * 3);
-  device_format.Format.nAvgBytesPerSec =
-      kTargetSampleRate * device_format.Format.nBlockAlign;
-  device_format.Format.cbSize =
-      sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
-  device_format.Samples.wValidBitsPerSample = 24;
-  device_format.dwChannelMask = channel_mask;
-  device_format.SubFormat = kSubtypePcm;
-
-  WAVEFORMATEXTENSIBLE mix_format = device_format;
-  mix_format.Format.wBitsPerSample = 32;
-  mix_format.Format.nBlockAlign = static_cast<WORD>(channels * 4);
-  mix_format.Format.nAvgBytesPerSec =
-      kTargetSampleRate * mix_format.Format.nBlockAlign;
-  mix_format.Samples.wValidBitsPerSample = 32;
-  mix_format.SubFormat = kSubtypeFloat;
-
-  policy->SetDeviceFormat(id.c_str(), &device_format.Format,
-                          &mix_format.Format);
 }
 
 }  // namespace
@@ -388,7 +244,7 @@ int SnapshotAudioDefaults() {
   return ok ? kExitOk : kExitSnapshotFailed;
 }
 
-int ConfigureFreshVbCable() {
+int RestoreAudioDefaults() {
   ComScope com;
   if (!com.usable()) {
     return kExitComFailed;
@@ -401,58 +257,38 @@ int ConfigureFreshVbCable() {
                               IID_PPV_ARGS(&policy)))) {
     return kExitComFailed;
   }
+  HKEY snapshot_key = nullptr;
+  if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, kInstallerKey, 0,
+                    KEY_QUERY_VALUE | KEY_SET_VALUE | KEY_WOW64_64KEY,
+                    &snapshot_key) != ERROR_SUCCESS) {
+    return kExitOk;  // No snapshot: nothing to restore.
+  }
 
   // The cable's endpoints appear asynchronously after the driver install;
   // Windows may make them the default devices as they arrive.
   constexpr DWORD kPollMs = 250;
   constexpr int kMaxPolls = 60;  // 15 s
   bool cable_present = false;
-  for (int i = 0; i < kMaxPolls; ++i) {
-    if (!FindCableEndpoints(enumerator.Get(), eRender).empty() &&
-        !FindCableEndpoints(enumerator.Get(), eCapture).empty()) {
-      cable_present = true;
-      break;
+  for (int i = 0; i < kMaxPolls && !cable_present; ++i) {
+    cable_present = !CableEndpointIds(eRender).empty() &&
+                    !CableEndpointIds(eCapture).empty();
+    if (!cable_present) {
+      Sleep(kPollMs);
     }
-    Sleep(kPollMs);
   }
-
-  HKEY snapshot_key = nullptr;
-  if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, kInstallerKey, 0,
-                    KEY_QUERY_VALUE | KEY_SET_VALUE | KEY_WOW64_64KEY,
-                    &snapshot_key) != ERROR_SUCCESS) {
-    snapshot_key = nullptr;
-  }
-
   if (cable_present) {
     // Default switching can lag behind endpoint arrival: restore twice.
     Sleep(2000);
-    if (snapshot_key != nullptr) {
-      RestoreDefaults(enumerator.Get(), policy.Get(), snapshot_key);
-    }
-    for (EDataFlow flow : {eRender, eCapture}) {
-      for (const CableEndpoint& endpoint :
-           FindCableEndpoints(enumerator.Get(), flow)) {
-        if (CompareStringOrdinal(endpoint.endpoint_name.c_str(), -1,
-                                 kCableInputName, -1, TRUE) == CSTR_EQUAL ||
-            CompareStringOrdinal(endpoint.endpoint_name.c_str(), -1,
-                                 kCableOutputName, -1, TRUE) == CSTR_EQUAL) {
-          EnsureEndpointRate(policy.Get(), endpoint.id);
-        }
-      }
-    }
+    RestoreDefaults(enumerator.Get(), policy.Get(), snapshot_key);
     Sleep(3000);
-    if (snapshot_key != nullptr) {
-      RestoreDefaults(enumerator.Get(), policy.Get(), snapshot_key);
-    }
+    RestoreDefaults(enumerator.Get(), policy.Get(), snapshot_key);
   }
 
-  if (snapshot_key != nullptr) {
-    for (EDataFlow flow : {eRender, eCapture}) {
-      for (ERole role : kRoles) {
-        RegDeleteValueW(snapshot_key, SnapshotValueName(flow, role).c_str());
-      }
+  for (EDataFlow flow : {eRender, eCapture}) {
+    for (ERole role : kRoles) {
+      RegDeleteValueW(snapshot_key, SnapshotValueName(flow, role).c_str());
     }
-    RegCloseKey(snapshot_key);
   }
+  RegCloseKey(snapshot_key);
   return kExitOk;
 }

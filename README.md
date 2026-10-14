@@ -11,10 +11,10 @@ microphone.
 
 ```
 Microphone ─┐
-            ├─► WebRTC AEC3 (+ optional neural echo model, noise suppression) ─► CABLE Input
+            ├─► WebRTC AEC3 (+ optional neural echo model, noise suppression) ─► Line 1 (playback)
 Speakers  ──┘   (loopback = echo reference)                                     │
                                                                                 ▼
-                                        Discord etc. use "CABLE Output (VB-Audio Virtual Cable)"
+                                     Discord etc. use "Line 1 (Virtual Audio Cable)" as the mic
 ```
 
 ## Features
@@ -27,9 +27,9 @@ Speakers  ──┘   (loopback = echo reference)                               
 - **Noise suppression**: off, WebRTC noise suppression (moderate or high), or RNNoise with
   gentle, medium, or full strength. Gentle and medium limit how much noise is removed, so your
   voice sounds more natural.
-- **VB-CABLE bundled**: the installer sets up the free (donationware) VB-CABLE virtual audio
-  device if you do not already have it. If VB-CABLE is missing, the app also works with
-  *Virtual Audio Cable Lite* (VAC Lite, "Line 1").
+- **Virtual Audio Cable Lite set up for you**: if you have no virtual audio cable, the installer
+  runs the setup of the free *Virtual Audio Cable (VAC) Lite*, which adds very little latency
+  (~19 ms measured, against ~80 ms for VB-CABLE). An installed VB-CABLE works too.
 - **Tray app**: live level meters, settings can be changed while it runs, optional start with
   Windows (off by default).
 
@@ -37,14 +37,14 @@ Speakers  ──┘   (loopback = echo reference)                               
 
 1. Download `AEC3VirtualMic-Setup-<version>.exe` from the
    [Releases](../../releases) page and run it.
-2. If no VB-CABLE is installed, the installer tells you so and installs it along with the app.
-   VB-CABLE is donationware by VB-Audio Software; see https://www.vb-cable.com. If you already
-   have VAC Lite, you can use it instead. An existing VB-CABLE installation is detected and left
-   untouched.
+2. If no virtual audio cable is installed, the installer tells you so and runs the setup of
+   Virtual Audio Cable (VAC) Lite by Eugene Muzychenko (https://vac.muzychenko.net). VAC Lite is
+   free for use in a private home environment not associated with income generation. An
+   installed VAC or VB-CABLE is detected and used as it is.
 3. Optionally enable starting with Windows (off by default; you can change this later in the app).
 
 Uninstalling removes the app, its settings and its autostart entry, and offers to remove
-VB-CABLE as well (pre-selected only if this installer installed it).
+VAC Lite as well (pre-selected only if this installer installed it).
 
 Requires 64-bit Windows 10 or 11.
 
@@ -55,7 +55,8 @@ Requires 64-bit Windows 10 or 11.
    reference, so pick the device Discord (or your game, music, …) plays through.
 3. Choose the echo suppression mode and noise suppression, then press **Start**.
 4. In Discord (*User Settings → Voice & Video → Input Device*) or any other app, select
-   **CABLE Output (VB-Audio Virtual Cable)** as the microphone.
+   **Line 1 (Virtual Audio Cable)** as the microphone (with VB-CABLE: **CABLE Output
+   (VB-Audio Virtual Cable)**). The app shows the exact name to pick.
 
 Tips:
 
@@ -107,8 +108,8 @@ scripts\fetch_webrtc.bat
 :: 2. Build bin\AEC3VirtualMic.exe (also fetches RNNoise's pinned model weights on first run)
 build.bat
 
-:: 3. Download VB-CABLE for the installer, then build the installer
-powershell -NoProfile -ExecutionPolicy Bypass -File installer\fetch_vbcable.ps1
+:: 3. Download VAC Lite for the installer, then build the installer
+powershell -NoProfile -ExecutionPolicy Bypass -File installer\fetch_vaclite.ps1
 "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" installer\AEC3VirtualMic.iss
 ```
 
@@ -136,10 +137,10 @@ To move to a newer WebRTC, change `WEBRTC_REVISION`, re-run `scripts\fetch_webrt
 
 | Path | Contents |
 | --- | --- |
-| `src/` | Application sources (engine, UI, VB-CABLE setup helper, resources, manifest) |
+| `src/` | Application sources (engine, UI, installer helpers, resources, manifest) |
 | `assets/` | Icons |
 | `third_party/` | Vendored source (RNNoise); see [third_party/README.md](third_party/README.md) for how every dependency is obtained |
-| `installer/` | Inno Setup script, pinned VB-CABLE download, installer research notes |
+| `installer/` | Inno Setup script, pinned VAC Lite download, installer research notes |
 | `scripts/` | WebRTC and RNNoise-model fetch scripts, WebRTC build patches, third-party notices generator |
 | `BUILD.gn`, `build.bat`, `WEBRTC_REVISION` | Build definition, build entry point, pinned WebRTC revision |
 
@@ -157,7 +158,8 @@ attached to the run as an artifact). Pushing a tag `vX.Y.Z` that matches `AEC3VM
   components under their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - Chrome's neural echo model is **not** bundled and **not** covered by the MIT license; the app
   only copies it from your own Chrome installation (see above).
-- The installer bundles **VB-CABLE Virtual Audio Device**, which is **donationware** by
-  VB-Audio Software, redistributed under VB-Audio's licensing terms
-  (https://vb-audio.com/Services/licensing.htm). If you use it, consider supporting VB-Audio at
-  https://www.vb-cable.com.
+- The installer bundles the unmodified **Virtual Audio Cable (VAC) Lite** package by Eugene
+  Muzychenko, redistributed free of charge as its license permits
+  (https://vac.muzychenko.net/en/license.txt). VAC Lite may only be used in a private home
+  environment not associated with income generation; for other use, see
+  https://vac.muzychenko.net.

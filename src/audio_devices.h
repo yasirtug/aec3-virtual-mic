@@ -27,10 +27,15 @@ struct VirtualCable {
   std::wstring capture_name;
 };
 
-// One entry per detected cable kind, in preference order (VB-CABLE first,
-// then VAC). `capture` is used to report each cable's exact capture-side name.
+// One entry per detected cable kind, in preference order (VAC Lite first,
+// then VB-CABLE). `capture` is used to report each cable's exact capture-side
+// name.
 std::vector<VirtualCable> FindVirtualCables(
     const std::vector<AudioDeviceInfo>& render,
     const std::vector<AudioDeviceInfo>& capture);
+
+// True for any playback or recording endpoint of VAC or VB-CABLE (all their
+// lines and variants), by friendly name.
+bool IsVirtualCableEndpointName(const std::wstring& friendly_name);
 
 #endif  // AEC3_VIRTUAL_MIC_AUDIO_DEVICES_H_

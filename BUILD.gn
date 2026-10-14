@@ -42,6 +42,8 @@ rtc_executable("aec3_virtual_mic") {
     "src/audio_devices.h",
     "src/audio_engine.cc",
     "src/audio_engine.h",
+    "src/cable_setup.cc",
+    "src/cable_setup.h",
     "src/echo_model.cc",
     "src/echo_model.h",
     "src/main.cc",
@@ -52,8 +54,6 @@ rtc_executable("aec3_virtual_mic") {
     "src/ui_level_meter.h",
     "src/ui_settings.cc",
     "src/ui_settings.h",
-    "src/vbcable_setup.cc",
-    "src/vbcable_setup.h",
   ]
 
   configs += [

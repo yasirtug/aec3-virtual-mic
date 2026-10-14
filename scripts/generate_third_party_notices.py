@@ -322,13 +322,14 @@ copies the file from the user's local Chrome profile to
 `%LOCALAPPDATA%\\AEC3VirtualMic\\`; nothing is downloaded or uploaded. If
 Chrome has not downloaded the model, the app uses classic WebRTC AEC3.
 
-## Bundled with the installer: VB-CABLE Virtual Audio Device
+## Bundled with the installer: Virtual Audio Cable Lite
 
-The Windows installer bundles **VB-CABLE Virtual Audio Device** by VB-Audio
-Software. VB-CABLE is **donationware**, redistributed under
-VB-Audio's licensing terms (https://vb-audio.com/Services/licensing.htm). It is
-not covered by this project's MIT license. More information and donations:
-https://www.vb-cable.com.
+The Windows installer bundles the unmodified **Virtual Audio Cable (VAC) Lite**
+package by Eugene Muzychenko and runs its own setup when no virtual audio cable
+is installed. VAC Lite is freeware, redistributed free of charge and unmodified
+as its license permits (https://vac.muzychenko.net/en/license.txt). It may only
+be used in a private home environment not associated with income generation,
+and it is not covered by this project's MIT license. https://vac.muzychenko.net
 
 ## Components linked into AEC3VirtualMic.exe
 

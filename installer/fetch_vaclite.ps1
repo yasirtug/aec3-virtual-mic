@@ -1,18 +1,20 @@
 <#
 .SYNOPSIS
-  Downloads the official VB-CABLE driver pack, verifies its pinned SHA-256 and
-  extracts it to installer/vendor/vbcable/ for AEC3VirtualMic.iss.
+  Downloads the official Virtual Audio Cable Lite package, verifies its pinned
+  SHA-256 and extracts it unmodified to installer/vendor/vaclite/ for
+  AEC3VirtualMic.iss.
 
 .DESCRIPTION
-  Download only: nothing is installed. The pack is VB-Audio donationware
-  (https://vb-cable.com); see installer/README.md for licensing and sources.
-  Exits with a non-zero code on download, hash or extraction failure.
+  Download only: nothing is installed. VAC Lite is freeware by Eugene
+  Muzychenko; its license allows free, unmodified redistribution (see
+  installer/README.md). Exits with a non-zero code on download, hash or
+  extraction failure.
 
 .PARAMETER Force
-  Re-download and re-extract even if the extracted pack is already present.
+  Re-download and re-extract even if the extracted package is already present.
 
 .EXAMPLE
-  pwsh -NoProfile -File installer/fetch_vbcable.ps1
+  powershell -NoProfile -ExecutionPolicy Bypass -File installer/fetch_vaclite.ps1
 #>
 [CmdletBinding()]
 param(
@@ -23,26 +25,27 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-# Pinned pack. When VB-Audio publishes a new pack, update all three values
-# (and the version noted in installer/README.md) after verifying the download.
-$PackUrl = 'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip'
-$PackFile = 'VBCABLE_Driver_Pack45.zip'
-$PackSha256 = 'B950E39F01AF1D04EA623C8F6D8EB9B6EA5C477C637295FABF20631C85116BFB'
+# Pinned package. When a new VAC Lite version is published, update all three
+# values (and the version noted in installer/README.md) after verifying it.
+$PackUrl = 'https://software.muzychenko.net/freeware/vac471lite.zip'
+$PackFile = 'vac471lite.zip'
+$PackSha256 = '1ED42A7E763BF6237438FB62191AE88B2922F014B37658B29D7801D72C9D5357'
 
-# Files the installer needs from the pack.
+# Files the installer relies on (VAC's setup needs the whole package layout).
 $RequiredFiles = @(
-  'VBCABLE_Setup_x64.exe',
-  'vbMmeCable64_win10.inf',
-  'vbaudio_cable64_win10.sys',
-  'vbaudio_cable64_win10.cat',
-  'vbaudio_cable64arm_win10.sys',
-  'readme.txt'
+  'setup.exe',
+  'setup64.exe',
+  'setup.ini',
+  'license.txt',
+  'vrtaucbl.inf',
+  'x64\vrtaucbl.sys'
 )
 
 $VendorDir = Join-Path $PSScriptRoot 'vendor'
-$DestDir = Join-Path $VendorDir 'vbcable'
+$DestDir = Join-Path $VendorDir 'vaclite'
 $ZipPath = Join-Path $VendorDir $PackFile
-$StampPath = Join-Path $DestDir '.sha256'
+# Kept beside (not inside) the extracted package so the package stays unmodified.
+$StampPath = Join-Path $VendorDir 'vaclite.sha256'
 
 function Test-Extracted {
   if (-not (Test-Path -LiteralPath $StampPath)) { return $false }
@@ -54,7 +57,7 @@ function Test-Extracted {
 }
 
 if (-not $Force -and (Test-Extracted)) {
-  Write-Host "VB-CABLE pack already present in $DestDir"
+  Write-Host "VAC Lite package already present in $DestDir"
   exit 0
 }
 
@@ -78,7 +81,7 @@ if ($Force -or -not $haveZip) {
   if ($actual -ne $PackSha256) {
     Remove-Item -LiteralPath $partial -Force
     Write-Error ("SHA-256 mismatch for $PackFile`n  expected $PackSha256`n  actual   $actual`n" +
-      'VB-Audio may have republished the pack; verify it and update the pin.')
+      'The package may have been republished; verify it and update the pin.')
     exit 2
   }
   Move-Item -LiteralPath $partial -Destination $ZipPath -Force
@@ -91,10 +94,10 @@ Expand-Archive -LiteralPath $ZipPath -DestinationPath $DestDir -Force
 
 foreach ($name in $RequiredFiles) {
   if (-not (Test-Path -LiteralPath (Join-Path $DestDir $name))) {
-    Write-Error "Extracted pack is missing $name"
+    Write-Error "Extracted package is missing $name"
     exit 3
   }
 }
 Set-Content -LiteralPath $StampPath -Value $PackSha256 -Encoding ascii
-Write-Host "VB-CABLE pack extracted to $DestDir"
+Write-Host "VAC Lite package extracted to $DestDir"
 exit 0

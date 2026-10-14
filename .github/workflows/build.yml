@@ -1,7 +1,7 @@
 name: Build
 
 # Builds AEC3VirtualMic.exe against the pinned WebRTC revision (WEBRTC_REVISION)
-# and packages the Inno Setup installer with VB-CABLE. Every push to main and
+# and packages the Inno Setup installer with VAC Lite. Every push to main and
 # every pull request produces the installer as a workflow artifact; pushing a
 # tag "vX.Y.Z" (matching AEC3VM_VERSION_STR in src/resource.h) also publishes
 # a GitHub release.
@@ -70,9 +70,9 @@ jobs:
         shell: cmd
         run: call build.bat
 
-      - name: Download VB-CABLE
+      - name: Download VAC Lite
         shell: pwsh
-        run: ./installer/fetch_vbcable.ps1
+        run: ./installer/fetch_vaclite.ps1
 
       - name: Ensure Inno Setup
         shell: pwsh
@@ -109,10 +109,12 @@ jobs:
           generate_release_notes: true
           body: |
             Download and run `AEC3VirtualMic-Setup-*.exe`, then pick
-            **CABLE Output (VB-Audio Virtual Cable)** as the microphone in Discord or other apps.
+            **Line 1 (Virtual Audio Cable)** as the microphone in Discord or other apps.
 
-            The installer bundles **VB-CABLE Virtual Audio Device**, donationware by VB-Audio Software
-            (https://www.vb-cable.com), and installs it only if it is not already present.
+            If no virtual audio cable is installed, the installer runs the setup of
+            **Virtual Audio Cable (VAC) Lite** by Eugene Muzychenko (https://vac.muzychenko.net),
+            redistributed unmodified. VAC Lite is free for use in a private home environment not
+            associated with income generation.
 
             The optional neural echo suppression uses Chrome's echo model, which is **not** included:
             the app copies it from your local Chrome profile if Chrome has downloaded it, and otherwise

@@ -21,7 +21,7 @@
 #include "ui_device_notifier.h"
 #include "ui_level_meter.h"
 #include "ui_settings.h"
-#include "vbcable_setup.h"
+#include "cable_setup.h"
 
 namespace {
 
@@ -29,7 +29,8 @@ constexpr wchar_t kAppName[] = L"AEC3 Virtual Mic";
 constexpr wchar_t kAppVersion[] = L"" AEC3VM_VERSION_STR;
 constexpr wchar_t kWindowClass[] = L"Aec3VirtualMicrophoneWindow";
 constexpr wchar_t kInstanceMutex[] = L"AEC3VirtualMic.Running";
-constexpr wchar_t kVbCableUrl[] = L"https://vb-audio.com/Cable/";
+constexpr wchar_t kVacDownloadUrl[] =
+    L"https://vac.muzychenko.net/en/download.htm";
 
 constexpr UINT kEngineErrorMessage = WM_APP + 1;  // wparam: engine session
 constexpr UINT kTrayMessage = WM_APP + 2;
@@ -132,12 +133,13 @@ constexpr wchar_t kTipSpeakers[] =
 constexpr wchar_t kTipCable[] =
     L"The app plays your processed voice into a virtual audio cable; other "
     L"apps use the cable's other end as their microphone.\n\nThe AEC3 Virtual "
-    L"Mic installer sets up VB-CABLE (VB-Audio donationware) for you. VAC "
-    L"Lite (\"Line 1\") also works.";
-constexpr wchar_t kTipCableLink[] = L"Opens the VB-Audio website.";
+    L"Mic installer sets up Virtual Audio Cable Lite (\"Line 1\") for you. "
+    L"VB-CABLE also works.";
+constexpr wchar_t kTipCableLink[] =
+    L"Opens the Virtual Audio Cable download page.";
 constexpr wchar_t kTipCableChoice[] =
     L"Which virtual cable receives your processed voice. You can choose when "
-    L"both VB-CABLE and VAC Lite are installed; the microphone to select in "
+    L"both VAC Lite and VB-CABLE are installed; the microphone to select in "
     L"Discord (shown under Status) changes with it. Changing this while "
     L"running restarts processing.";
 constexpr wchar_t kTipEchoCancellation[] =
@@ -638,7 +640,7 @@ const wchar_t* CableKindName(VirtualCableKind kind) {
 }
 
 // Uses the user's chosen cable when it is installed, otherwise the preferred
-// one (VB-CABLE before VAC Lite).
+// one (VAC Lite before VB-CABLE).
 void SelectCable(AppState* state) {
   state->cable = VirtualCable{};
   for (const VirtualCable& cable : state->cables) {
@@ -685,22 +687,18 @@ void UpdateCableUi(AppState* state) {
   std::wstring link;
   switch (state->cable.kind) {
     case VirtualCableKind::kVbCable:
-      text = L"Your voice is played into " + state->cable.render_name + L".";
-      link = L"VB-CABLE is VB-Audio donationware \u2014 <a "
-             L"href=\"https://www.vb-cable.com\">www.vb-cable.com</a>";
-      break;
     case VirtualCableKind::kVacLite:
       text = L"Your voice is played into " + state->cable.render_name + L".";
       break;
     case VirtualCableKind::kNone:
       text = L"No virtual cable found. Other apps hear this app through one; "
-             L"the installer sets up VB-CABLE, or get it from VB-Audio:";
-      link = std::wstring(L"<a href=\"") + kVbCableUrl +
-             L"\">Download VB-CABLE (vb-audio.com/Cable)</a>";
+             L"the installer sets up Virtual Audio Cable Lite, or get it here:";
+      link = std::wstring(L"<a href=\"") + kVacDownloadUrl +
+             L"\">Download Virtual Audio Cable (vac.muzychenko.net)</a>";
       break;
   }
   if (state->cables.size() > 1) {
-    text += L" VB-CABLE and VAC Lite are both installed; choose above.";
+    text += L" VAC Lite and VB-CABLE are both installed; choose above.";
   }
   SetWindowTextW(state->cable_text, text.c_str());
   InvalidateRect(state->cable_text, nullptr, TRUE);
@@ -723,8 +721,8 @@ bool StartAudio(AppState* state) {
   }
   if (state->cable.kind == VirtualCableKind::kNone) {
     SetStatus(state, UiStatus::kError,
-              L"No virtual cable found. Install VB-CABLE (see Devices), then "
-              L"click Start.");
+              L"No virtual cable found. Install Virtual Audio Cable Lite (see "
+              L"Devices), then click Start.");
     return false;
   }
   const AudioDeviceInfo* microphone =
@@ -1078,9 +1076,9 @@ void ShowAbout(AppState* state) {
       L"TensorFlow Lite (Apache-2.0) \u2014 see " +
       LocalFileLink({L"THIRD_PARTY_NOTICES.txt", L"THIRD_PARTY_NOTICES.md"},
                     L"third-party notices") +
-      L".\n\nVB-CABLE is VB-Audio donationware \u2014 "
-      L"<a href=\"https://www.vb-cable.com\">www.vb-cable.com</a> \u2014 all "
-      L"participations are welcome.";
+      L".\n\nVirtual Audio Cable Lite by Eugene Muzychenko is free for use "
+      L"in a private home environment not associated with income generation "
+      L"\u2014 <a href=\"https://vac.muzychenko.net/en/\">vac.muzychenko.net</a>.";
   const wchar_t footer[] =
       L"Neural echo model: Google's unreleased machine-learning residual echo "
       L"estimator, which Chrome downloads for its own echo cancellation. This "
@@ -1841,7 +1839,7 @@ void ActivateExistingInstance() {
 struct CommandLine {
   bool startup = false;
   bool enable_autostart = false;
-  bool configure_vbcable = false;
+  bool restore_audio_defaults = false;
   bool snapshot_audio_defaults = false;
   bool detect_cables = false;
 };
@@ -1860,8 +1858,9 @@ CommandLine ParseCommandLine() {
       result.detect_cables = true;
     } else if (_wcsicmp(arguments[index], L"--enable-autostart") == 0) {
       result.enable_autostart = true;
-    } else if (_wcsicmp(arguments[index], L"--configure-vbcable") == 0) {
-      result.configure_vbcable = true;
+    } else if (_wcsicmp(arguments[index], L"--restore-audio-defaults") ==
+               0) {
+      result.restore_audio_defaults = true;
     } else if (_wcsicmp(arguments[index], L"--snapshot-audio-defaults") ==
                0) {
       result.snapshot_audio_defaults = true;
@@ -1876,8 +1875,8 @@ CommandLine ParseCommandLine() {
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
   const CommandLine command_line = ParseCommandLine();
   // Installer helpers: no UI, no single-instance mutex, no window.
-  if (command_line.configure_vbcable) {
-    return ConfigureFreshVbCable();
+  if (command_line.restore_audio_defaults) {
+    return RestoreAudioDefaults();
   }
   if (command_line.detect_cables) {
     return DetectVirtualCables();
