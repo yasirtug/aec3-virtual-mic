@@ -57,6 +57,9 @@ class AudioEngine {
   void SetNoiseSuppressionMode(NoiseSuppressionMode mode);
   // Live; also remembered for next Start.
   void SetEchoCancellation(bool enabled);
+  // Live; also remembered for next Start. While muted the cable receives
+  // silence (10 ms fade); processing keeps running.
+  void SetMuted(bool muted);
   bool running() const;
   // True while running with Chrome's neural residual echo estimator model.
   bool neural_echo_estimator_active() const;

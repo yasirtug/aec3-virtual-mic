@@ -52,6 +52,8 @@ rtc_executable("aec3_virtual_mic") {
     "src/ui_device_notifier.h",
     "src/ui_level_meter.cc",
     "src/ui_level_meter.h",
+    "src/ui_mute.cc",
+    "src/ui_mute.h",
     "src/ui_settings.cc",
     "src/ui_settings.h",
   ]

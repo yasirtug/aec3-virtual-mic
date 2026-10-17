@@ -20,6 +20,7 @@
 #include "resource.h"
 #include "ui_device_notifier.h"
 #include "ui_level_meter.h"
+#include "ui_mute.h"
 #include "ui_settings.h"
 #include "cable_setup.h"
 
@@ -41,9 +42,14 @@ constexpr UINT_PTR kLevelTimer = 1;
 constexpr UINT kLevelTimerMs = 66;  // ~15 Hz.
 constexpr UINT_PTR kDeviceRefreshTimer = 2;
 constexpr UINT kDeviceRefreshDelayMs = 400;  // Coalesces bursts of changes.
+// While another app holds the mute hotkey, registration is retried so it
+// starts working as soon as that app lets go (or starts after us at boot).
+constexpr UINT_PTR kHotkeyRetryTimer = 3;
+constexpr UINT kHotkeyRetryMs = 2000;
 constexpr ULONGLONG kClipWarningHoldMs = 3000;
 
 constexpr UINT kTrayIconId = 1;
+constexpr int kMuteHotkeyId = 1;  // RegisterHotKey id.
 
 // Settings value names (HKCU\Software\AEC3VirtualMic).
 constexpr wchar_t kMicrophoneSetting[] = L"MicrophoneId";
@@ -52,9 +58,12 @@ constexpr wchar_t kCableSetting[] = L"VirtualCable";  // "vbcable" or "vac".
 constexpr wchar_t kNoiseSetting[] = L"NoiseSuppression";
 constexpr wchar_t kEchoCancellationSetting[] = L"EchoCancellation";
 constexpr wchar_t kNeuralModelSetting[] = L"NeuralEchoModel";
+// HKM_GETHOTKEY value as decimal (LOBYTE key, HIBYTE HOTKEYF_*); 0 = none.
+constexpr wchar_t kMuteHotkeySetting[] = L"MuteHotkey";
 
 enum ControlId : int {
   kStartStopButton = 1001,
+  kMuteButton,
   kStatusText,
   kStatusDetail,
   kDiscordName,
@@ -75,8 +84,12 @@ enum ControlId : int {
   kClipSettingsButton,
   kAutostartCheck,
   kAboutButton,
+  kHotkeyControl,
+  kHotkeyClearButton,
+  kHotkeyStatus,
   kTrayShow = 2001,
   kTrayStartStop,
+  kTrayMute,
   kTrayExit,
 };
 
@@ -196,6 +209,15 @@ constexpr wchar_t kTipAutostart[] =
     L"the notification area and begins processing right away. Off unless you "
     L"turn it on.";
 constexpr wchar_t kTipAbout[] = L"Version, license and third-party notices.";
+constexpr wchar_t kTipMute[] =
+    L"Mute or unmute your voice. While muted, other apps receive silence "
+    L"from the virtual cable; processing keeps running, so unmuting is "
+    L"instant. Mute is off whenever the app starts.";
+constexpr wchar_t kTipHotkey[] =
+    L"A key combination that mutes or unmutes from anywhere, even while a "
+    L"game or another app has focus.\n\nClick the box and press the "
+    L"combination: Ctrl, Alt and/or Shift plus a key.";
+constexpr wchar_t kTipHotkeyClear[] = L"Remove the mute hotkey.";
 
 // ---------------------------------------------------------------------------
 
@@ -211,6 +233,7 @@ struct AppState {
   HWND status_text = nullptr;
   HWND status_detail = nullptr;
   HWND start_stop_button = nullptr;
+  HWND mute_button = nullptr;
   HWND discord_label = nullptr;
   HWND discord_name = nullptr;
   // Devices.
@@ -246,6 +269,10 @@ struct AppState {
   HWND app_group = nullptr;
   HWND autostart_check = nullptr;
   HWND about_button = nullptr;
+  HWND hotkey_label = nullptr;
+  HWND hotkey_control = nullptr;
+  HWND hotkey_clear_button = nullptr;
+  HWND hotkey_status = nullptr;
 
   UINT dpi = USER_DEFAULT_SCREEN_DPI;
   HFONT font = nullptr;
@@ -282,6 +309,15 @@ struct AppState {
   UINT taskbar_created_message = 0;
   bool tray_icon_added = false;
   bool exit_requested = false;
+
+  // Mute (never persisted: the app always starts unmuted).
+  bool muted = false;
+  MuteStatePublisher mute_publisher;
+  HICON muted_tray_icon = nullptr;
+  WORD hotkey = 0;  // kMuteHotkeySetting format.
+  bool hotkey_registered = false;
+  DWORD hotkey_error = ERROR_SUCCESS;  // RegisterHotKey failure.
+  bool hotkey_capturing = false;       // The hotkey box has focus.
 };
 
 int Scale(const AppState* state, int value) {
@@ -395,17 +431,29 @@ const AudioDeviceInfo* FindDevice(const std::vector<AudioDeviceInfo>& devices,
 // Tray icon.
 
 std::wstring TrayTip(const AppState* state) {
+  std::wstring tip = std::wstring(kAppName) + L" \u2014 ";
   switch (state->status) {
     case UiStatus::kRunning:
-      return std::wstring(kAppName) + L" \u2014 Running";
+      return tip + (state->muted ? L"Muted" : L"Running");
     case UiStatus::kRestarting:
-      return std::wstring(kAppName) + L" \u2014 Restarting\u2026";
+      tip += L"Restarting\u2026";
+      break;
     case UiStatus::kError:
-      return std::wstring(kAppName) + L" \u2014 Stopped (error)";
+      tip += L"Stopped (error)";
+      break;
     case UiStatus::kStopped:
+      tip += L"Stopped";
       break;
   }
-  return std::wstring(kAppName) + L" \u2014 Stopped";
+  return state->muted ? tip + L", muted" : tip;
+}
+
+HICON TrayIconHandle(const AppState* state) {
+  if (state->muted && state->muted_tray_icon != nullptr) {
+    return state->muted_tray_icon;
+  }
+  return reinterpret_cast<HICON>(
+      GetClassLongPtrW(state->window, GCLP_HICONSM));
 }
 
 void AddTrayIcon(AppState* state) {
@@ -418,13 +466,12 @@ void AddTrayIcon(AppState* state) {
   icon.uID = kTrayIconId;
   icon.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
   icon.uCallbackMessage = kTrayMessage;
-  icon.hIcon =
-      reinterpret_cast<HICON>(GetClassLongPtrW(state->window, GCLP_HICONSM));
+  icon.hIcon = TrayIconHandle(state);
   wcsncpy_s(icon.szTip, TrayTip(state).c_str(), _TRUNCATE);
   state->tray_icon_added = Shell_NotifyIconW(NIM_ADD, &icon) == TRUE;
 }
 
-void UpdateTrayTip(AppState* state) {
+void UpdateTrayIcon(AppState* state) {
   if (!state->tray_icon_added) {
     return;
   }
@@ -432,7 +479,8 @@ void UpdateTrayTip(AppState* state) {
   icon.cbSize = sizeof(icon);
   icon.hWnd = state->window;
   icon.uID = kTrayIconId;
-  icon.uFlags = NIF_TIP;
+  icon.uFlags = NIF_ICON | NIF_TIP;
+  icon.hIcon = TrayIconHandle(state);
   wcsncpy_s(icon.szTip, TrayTip(state).c_str(), _TRUNCATE);
   Shell_NotifyIconW(NIM_MODIFY, &icon);
 }
@@ -589,12 +637,25 @@ std::wstring RunningDetail(const AppState* state) {
          L". Select the device below as your microphone in other apps.";
 }
 
+std::wstring MutedDetail(const AppState* state) {
+  if (state->hotkey_registered) {
+    return L"Other apps hear silence from " + state->cable.capture_name +
+           L". Press " + HotkeyName(state->hotkey) +
+           L" or Unmute to talk again.";
+  }
+  return L"Other apps hear silence from " + state->cable.capture_name +
+         L". Click Unmute to talk again.";
+}
+
+// While running and muted, the title and detail show the mute instead of
+// `detail`; ApplyMute re-renders the running status when mute changes.
 void SetStatus(AppState* state, UiStatus status, const std::wstring& detail) {
   state->status = status;
+  const bool muted_running = status == UiStatus::kRunning && state->muted;
   const wchar_t* title = L"Stopped";
   switch (status) {
     case UiStatus::kRunning:
-      title = L"Running";
+      title = muted_running ? L"Muted" : L"Running";
       break;
     case UiStatus::kRestarting:
       title = L"Restarting\u2026";
@@ -606,13 +667,14 @@ void SetStatus(AppState* state, UiStatus status, const std::wstring& detail) {
       break;
   }
   SetWindowTextW(state->status_text, title);
-  SetWindowTextW(state->status_detail, detail.c_str());
+  SetWindowTextW(state->status_detail,
+                 muted_running ? MutedDetail(state).c_str() : detail.c_str());
   const bool active =
       status == UiStatus::kRunning || status == UiStatus::kRestarting;
   SetWindowTextW(state->start_stop_button, active ? L"Stop" : L"Start");
   InvalidateRect(state->status_text, nullptr, TRUE);
   UpdateModelStatus(state);
-  UpdateTrayTip(state);
+  UpdateTrayIcon(state);
 }
 
 // Refreshes the idle status line (e.g. after device changes) without hiding
@@ -816,6 +878,113 @@ void ToggleAudio(AppState* state) {
   } else {
     StartAudio(state);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Mute and its hotkey.
+
+void ApplyMute(AppState* state, bool muted) {
+  state->muted = muted;
+  state->engine.SetMuted(muted);
+  state->mute_publisher.Publish(muted);
+  SetWindowTextW(state->mute_button, muted ? L"Unmute" : L"Mute");
+  if (state->status == UiStatus::kRunning) {
+    SetStatus(state, UiStatus::kRunning, RunningDetail(state));
+  } else {
+    UpdateTrayIcon(state);
+  }
+}
+
+void ToggleMute(AppState* state) { ApplyMute(state, !state->muted); }
+
+void UpdateHotkeyStatus(AppState* state) {
+  const std::wstring name = HotkeyName(state->hotkey);
+  std::wstring text;
+  if (state->hotkey_capturing) {
+    text = L"Press the combination now: Ctrl, Alt and/or Shift plus a key.";
+  } else if (name.empty()) {
+    text = L"No hotkey. Click the box and press a combination, e.g. "
+           L"Ctrl + Alt + M.";
+  } else if (state->hotkey_registered) {
+    text = L"Press " + name + L" anywhere to mute or unmute.";
+  } else if (state->hotkey_error == ERROR_HOTKEY_ALREADY_REGISTERED) {
+    text = name + L" is already used by another app. Remove it there or "
+                  L"choose another.";
+  } else {
+    text = L"Windows did not accept " + name + L". Choose another "
+                                                L"combination.";
+  }
+  SetWindowTextW(state->hotkey_status, text.c_str());
+  InvalidateRect(state->hotkey_status, nullptr, TRUE);
+}
+
+void UnregisterMuteHotkey(AppState* state) {
+  if (state->hotkey_registered) {
+    UnregisterHotKey(state->window, kMuteHotkeyId);
+    state->hotkey_registered = false;
+  }
+}
+
+void RegisterMuteHotkey(AppState* state) {
+  UnregisterMuteHotkey(state);
+  state->hotkey_error = ERROR_SUCCESS;
+  if (LOBYTE(state->hotkey) != 0) {
+    state->hotkey_registered =
+        RegisterHotKey(state->window, kMuteHotkeyId,
+                       HotkeyRegisterModifiers(state->hotkey),
+                       LOBYTE(state->hotkey)) != FALSE;
+    if (!state->hotkey_registered) {
+      state->hotkey_error = GetLastError();
+    }
+  }
+  if (state->hotkey_error == ERROR_HOTKEY_ALREADY_REGISTERED) {
+    SetTimer(state->window, kHotkeyRetryTimer, kHotkeyRetryMs, nullptr);
+  } else {
+    KillTimer(state->window, kHotkeyRetryTimer);
+  }
+  EnableWindow(state->hotkey_clear_button, state->hotkey != 0);
+  UpdateHotkeyStatus(state);
+  if (state->status == UiStatus::kRunning && state->muted) {
+    SetStatus(state, UiStatus::kRunning, RunningDetail(state));  // Names it.
+  }
+}
+
+void SetMuteHotkey(AppState* state, WORD hotkey) {
+  state->hotkey = hotkey;
+  WriteSetting(kMuteHotkeySetting, std::to_wstring(hotkey));
+  SendMessageW(state->hotkey_control, HKM_SETHOTKEY, hotkey, 0);
+  RegisterMuteHotkey(state);
+}
+
+// While the hotkey box has focus the current hotkey is released, so pressing
+// the same combination reaches the box instead of toggling mute. Leaving the
+// box applies what was entered (modifiers alone keep the previous hotkey).
+LRESULT CALLBACK HotkeyControlProcedure(HWND control,
+                                        UINT message,
+                                        WPARAM wparam,
+                                        LPARAM lparam,
+                                        UINT_PTR,
+                                        DWORD_PTR data) {
+  auto* state = reinterpret_cast<AppState*>(data);
+  switch (message) {
+    case WM_SETFOCUS:
+      UnregisterMuteHotkey(state);
+      KillTimer(state->window, kHotkeyRetryTimer);
+      state->hotkey_capturing = true;
+      UpdateHotkeyStatus(state);
+      break;
+    case WM_KILLFOCUS: {
+      state->hotkey_capturing = false;
+      const WORD entered =
+          LOWORD(SendMessageW(control, HKM_GETHOTKEY, 0, 0));
+      SetMuteHotkey(state, LOBYTE(entered) != 0 ? entered : state->hotkey);
+      break;
+    }
+    case WM_NCDESTROY:
+      RemoveWindowSubclass(control, HotkeyControlProcedure, 0);
+      break;
+  }
+  return DefSubclassProc(control, message, wparam, lparam);
 }
 
 // ---------------------------------------------------------------------------
@@ -1115,6 +1284,7 @@ void ShowTrayMenu(AppState* state) {
   AppendMenuW(menu, MF_STRING, kTrayStartStop,
               state->engine.running() ? L"Stop processing"
                                       : L"Start processing");
+  AppendMenuW(menu, MF_STRING, kTrayMute, state->muted ? L"Unmute" : L"Mute");
   AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(menu, MF_STRING, kTrayExit, L"Exit");
   SetMenuDefaultItem(menu, kTrayShow, FALSE);
@@ -1125,6 +1295,8 @@ void ShowTrayMenu(AppState* state) {
   DestroyMenu(menu);
   if (command == kTrayShow) {
     ShowFromTray(state);
+  } else if (command == kTrayMute) {
+    ToggleMute(state);
   } else if (command == kTrayStartStop) {
     ToggleAudio(state);
     if (!state->engine.running() && state->status == UiStatus::kError) {
@@ -1183,6 +1355,7 @@ void CreateControls(AppState* state) {
   // Creation order is the tab order.
   state->status_group = CreateGroup(state, L"Status");
   state->status_text = CreateLabel(state, L"Stopped", kStatusText);
+  state->mute_button = CreateButton(state, L"Mute", kMuteButton);
   state->start_stop_button = CreateButton(state, L"Start", kStartStopButton);
   state->status_detail = CreateLabel(state, L"", kStatusDetail);
   state->discord_label = CreateLabel(
@@ -1234,6 +1407,19 @@ void CreateControls(AppState* state) {
   state->autostart_check =
       CreateCheckBox(state, L"Start with Windows", kAutostartCheck);
   state->about_button = CreateButton(state, L"About", kAboutButton);
+  state->hotkey_label = CreateLabel(state, L"Mute hotkey");
+  state->hotkey_control = CreateChild(state, HOTKEY_CLASSW, nullptr,
+                                      WS_TABSTOP, kHotkeyControl,
+                                      WS_EX_CLIENTEDGE);
+  state->hotkey_clear_button =
+      CreateButton(state, L"Clear", kHotkeyClearButton);
+  state->hotkey_status = CreateLabel(state, L"", kHotkeyStatus);
+  // A bare key (or Shift + key) would fire while typing anywhere; such
+  // entries become Ctrl + Alt + key.
+  SendMessageW(state->hotkey_control, HKM_SETRULES, HKCOMB_NONE | HKCOMB_S,
+               MAKELPARAM(HOTKEYF_CONTROL | HOTKEYF_ALT, 0));
+  SetWindowSubclass(state->hotkey_control, HotkeyControlProcedure, 0,
+                    reinterpret_cast<DWORD_PTR>(state));
 
   for (const wchar_t* label : kEchoModeLabels) {
     SendMessageW(state->echo_mode_combo, CB_ADDSTRING, 0,
@@ -1301,6 +1487,11 @@ void CreateTooltips(AppState* state) {
       {state->clip_settings_button, kTipClipSettings},
       {state->autostart_check, kTipAutostart},
       {state->about_button, kTipAbout},
+      {state->mute_button, kTipMute},
+      {state->hotkey_label, kTipHotkey},
+      {state->hotkey_control, kTipHotkey},
+      {state->hotkey_status, kTipHotkey},
+      {state->hotkey_clear_button, kTipHotkeyClear},
   };
   for (const auto& tool : tools) {
     AddTooltip(state, tool.control, tool.text);
@@ -1425,8 +1616,11 @@ SIZE Layout(AppState* state) {
     const int button_width = s(112);
     const int button_height = control + s(6);
     const int row = std::max(status_height, button_height);
+    const int mute_width = s(88);
     Place(state->status_text, x, left.y + (row - status_height) / 2,
-          w - button_width - gap, status_height);
+          w - button_width - mute_width - 2 * gap, status_height);
+    Place(state->mute_button, x + w - button_width - gap - mute_width,
+          left.y + (row - button_height) / 2, mute_width, button_height);
     Place(state->start_stop_button, x + w - button_width,
           left.y + (row - button_height) / 2, button_width, button_height);
     left.y += row + small_gap;
@@ -1508,7 +1702,16 @@ SIZE Layout(AppState* state) {
     Place(state->autostart_check, x, right.y, w - about_width - gap, control);
     Place(state->about_button, x + w - about_width, right.y, about_width,
           control);
-    right.y += control;
+    right.y += control + gap;
+    const int clear_width = s(72);
+    label_row(state->hotkey_label, x, right.y, control);
+    Place(state->hotkey_control, x + label_width, right.y,
+          w - label_width - clear_width - gap, control);
+    Place(state->hotkey_clear_button, x + w - clear_width, right.y,
+          clear_width, control);
+    right.y += control + small_gap;
+    Place(state->hotkey_status, x, right.y, w, 2 * text);
+    right.y += 2 * text;
     end_group(right, state->app_group);
   }
 
@@ -1568,12 +1771,18 @@ void LoadSettingsIntoControls(AppState* state) {
 
   SendMessageW(state->autostart_check, BM_SETCHECK,
                IsAutostartEnabled() ? BST_CHECKED : BST_UNCHECKED, 0);
+
+  const unsigned long hotkey =
+      wcstoul(ReadSetting(kMuteHotkeySetting).c_str(), nullptr, 10);
+  state->hotkey = hotkey <= 0xFFFF ? static_cast<WORD>(hotkey) : 0;
+  SendMessageW(state->hotkey_control, HKM_SETHOTKEY, state->hotkey, 0);
+  RegisterMuteHotkey(state);
 }
 
 COLORREF StatusColor(const AppState* state) {
   switch (state->status) {
     case UiStatus::kRunning:
-      return RGB(16, 124, 16);
+      return state->muted ? RGB(196, 43, 28) : RGB(16, 124, 16);
     case UiStatus::kRestarting:
       return RGB(157, 93, 0);
     case UiStatus::kError:
@@ -1591,10 +1800,14 @@ LRESULT OnControlColorStatic(AppState* state, HDC dc, HWND control) {
       color = StatusColor(state);
     } else if (control == state->clip_text ||
                (control == state->cable_text &&
-                state->cable.kind == VirtualCableKind::kNone)) {
+                state->cable.kind == VirtualCableKind::kNone) ||
+               (control == state->hotkey_status &&
+                state->hotkey_error != ERROR_SUCCESS &&
+                !state->hotkey_capturing)) {
       color = RGB(196, 43, 28);
     } else if (control == state->status_detail ||
-               control == state->model_status) {
+               control == state->model_status ||
+               control == state->hotkey_status) {
       color = RGB(80, 80, 80);
     }
   }
@@ -1677,6 +1890,16 @@ void OnCommand(AppState* state, int id, int code) {
         }
       }
       return;
+    case kMuteButton:
+      if (code == BN_CLICKED) {
+        ToggleMute(state);
+      }
+      return;
+    case kHotkeyClearButton:
+      if (code == BN_CLICKED) {
+        SetMuteHotkey(state, 0);
+      }
+      return;
     case kAboutButton:
       if (code == BN_CLICKED) {
         ShowAbout(state);
@@ -1724,6 +1947,8 @@ LRESULT CALLBACK WindowProcedure(HWND window,
       state->dpi = GetDpiForWindow(window);
       CreateControls(state);
       CreateTooltips(state);
+      state->muted_tray_icon = CreateMutedIcon(reinterpret_cast<HICON>(
+          GetClassLongPtrW(window, GCLP_HICONSM)));
       ApplyFonts(state);
       LoadSettingsIntoControls(state);
       ResizeWindowToLayout(state, nullptr);
@@ -1763,6 +1988,10 @@ LRESULT CALLBACK WindowProcedure(HWND window,
       } else if (wparam == kDeviceRefreshTimer) {
         KillTimer(window, kDeviceRefreshTimer);
         RefreshDevices(state);
+      } else if (wparam == kHotkeyRetryTimer) {
+        if (!state->hotkey_capturing && !state->hotkey_registered) {
+          RegisterMuteHotkey(state);
+        }
       }
       return 0;
     case WM_SHOWWINDOW:
@@ -1775,6 +2004,11 @@ LRESULT CALLBACK WindowProcedure(HWND window,
     case kDevicesChangedMessage:
       // Restarting the timer coalesces a burst of endpoint notifications.
       SetTimer(window, kDeviceRefreshTimer, kDeviceRefreshDelayMs, nullptr);
+      return 0;
+    case WM_HOTKEY:
+      if (wparam == kMuteHotkeyId) {
+        ToggleMute(state);
+      }
       return 0;
     case kActivateMessage:
       ShowFromTray(state);
@@ -1812,9 +2046,15 @@ LRESULT CALLBACK WindowProcedure(HWND window,
       state->device_notifier.Stop();
       KillTimer(window, kLevelTimer);
       KillTimer(window, kDeviceRefreshTimer);
+      KillTimer(window, kHotkeyRetryTimer);
       ++state->engine_session;
       state->engine.Stop();
+      UnregisterMuteHotkey(state);
       RemoveTrayIcon(state);
+      if (state->muted_tray_icon != nullptr) {
+        DestroyIcon(state->muted_tray_icon);
+        state->muted_tray_icon = nullptr;
+      }
       PostQuitMessage(0);
       return 0;
   }

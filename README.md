@@ -32,6 +32,9 @@ Speakers  ──┘   (loopback = echo reference)                               
 - **Virtual Audio Cable Lite set up for you**: if you have no virtual audio cable, the installer
   runs the setup of the free *Virtual Audio Cable (VAC) Lite*, which adds very little latency
   (~19 ms measured, against ~80 ms for VB-CABLE). An installed VB-CABLE works too.
+- **Mute with a global hotkey**: the app stops sending your voice (the cable carries silence, so
+  nothing else can unmute it behind your back). Set any Ctrl/Alt/Shift combination in the app;
+  the tray icon shows a red badge while muted. Mute is off whenever the app starts.
 - **Tray app**: live level meters, settings can be changed while it runs, optional start with
   Windows (off by default).
 
@@ -65,6 +68,17 @@ Tips:
 - Switch Discord's Input Profile to Studio so your voice doesn't get processed twice.
 - If something fails (for example a device is unplugged), the app stops and shows the reason.
   Press **Start** again once the problem is fixed.
+- To mute from anywhere, click the **Mute hotkey** box (App section) and press a combination,
+  e.g. Ctrl + Alt + M. If another app already uses it, the app says so; remove it there (for
+  example SoundSwitch's mute hotkey) or pick another.
+
+## Mute state for other apps
+
+While muted, the app signals the named event `Local\AEC3VirtualMic.Muted` (manual-reset);
+every change also sets the auto-reset event `Local\AEC3VirtualMic.MuteChanged`. Both exist only
+while the app runs. A helper (for example a keyboard LED) can open them with `SYNCHRONIZE`
+access, test `Muted` with a zero timeout and wait on `MuteChanged`; reopening them on each
+check means a closed or crashed app reads as "not muted".
 
 ## About the neural echo model
 

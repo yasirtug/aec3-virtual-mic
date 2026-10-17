@@ -634,6 +634,7 @@ class AudioEngine::Impl {
     active_noise_mode_ = engine_config.noise_mode;
     active_echo_cancellation_ = engine_config.echo_cancellation;
     rnnoise_dry_history_.fill(0.0f);
+    output_gain_ = muted_.load(std::memory_order_relaxed) ? 0.0f : 1.0f;
 
     webrtc::AudioProcessing::Config config;
     config.pipeline.maximum_internal_processing_rate = kSampleRate;
@@ -805,6 +806,8 @@ class AudioEngine::Impl {
     echo_cancellation_.store(enabled, std::memory_order_relaxed);
   }
 
+  void SetMuted(bool muted) { muted_.store(muted, std::memory_order_relaxed); }
+
   bool running() const { return running_.load(); }
   bool neural_echo_estimator_active() const {
     return neural_echo_estimator_active_.load();
@@ -967,6 +970,7 @@ class AudioEngine::Impl {
                     std::copy(dry.begin(), dry.end(),
                               rnnoise_dry_history_.begin() + kFrameSamples);
                   }
+                  ApplyOutputGain(channels[0]);
                   output_meter_.Update(FramePeak(channels[0], kFrameSamples));
                   output_.Push(channels[0], kFrameSamples);
                 }
@@ -1124,8 +1128,29 @@ class AudioEngine::Impl {
     CoUninitialize();
   }
 
+  // Mute: fades the processed voice to/from silence over one 10 ms frame
+  // (no click). Capture thread only; processing keeps running underneath so
+  // AEC3 stays converged and unmuting is clean immediately.
+  void ApplyOutputGain(float* frame) {
+    const float target = muted_.load(std::memory_order_relaxed) ? 0.0f : 1.0f;
+    if (output_gain_ == target) {
+      if (target == 0.0f) {
+        std::fill_n(frame, kFrameSamples, 0.0f);
+      }
+      return;
+    }
+    const float step =
+        (target - output_gain_) / static_cast<float>(kFrameSamples);
+    for (size_t i = 0; i < kFrameSamples; ++i) {
+      frame[i] *= output_gain_ + step * static_cast<float>(i + 1);
+    }
+    output_gain_ = target;
+  }
+
   std::atomic<NoiseSuppressionMode> noise_mode_ = NoiseSuppressionMode::kOff;
   std::atomic<bool> echo_cancellation_ = true;
+  std::atomic<bool> muted_ = false;
+  float output_gain_ = 1.0f;  // Capture thread; see ApplyOutputGain.
   NoiseSuppressionMode active_noise_mode_ = NoiseSuppressionMode::kOff;
   bool active_echo_cancellation_ = true;
   std::unique_ptr<DenoiseState, decltype(&rnnoise_destroy)> rnnoise_{
@@ -1171,6 +1196,7 @@ void AudioEngine::SetNoiseSuppressionMode(NoiseSuppressionMode mode) {
 void AudioEngine::SetEchoCancellation(bool enabled) {
   impl_->SetEchoCancellation(enabled);
 }
+void AudioEngine::SetMuted(bool muted) { impl_->SetMuted(muted); }
 bool AudioEngine::running() const { return impl_->running(); }
 bool AudioEngine::neural_echo_estimator_active() const {
   return impl_->neural_echo_estimator_active();
